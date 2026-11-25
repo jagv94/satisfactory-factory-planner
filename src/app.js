@@ -116,7 +116,7 @@ function renderSettings() {
   $("belt").innerHTML = Object.entries(DB.belts).map(([k, v]) => `<option value="${k}"${k === S.cfg.belt ? " selected" : ""}>${k} · ${nf(v, 0)}/min</option>`).join("");
   $("pipe").innerHTML = Object.entries(DB.pipes).map(([k, v]) => `<option value="${k}"${k === S.cfg.pipe ? " selected" : ""}>${k} · ${nf(v, 0)} m³/min</option>`).join("");
   $("lang").value = S.lang; $("icons").value = S.icons; $("group").value = S.group;
-  $("iconInfo").textContent = iconsFound ? "Carpeta icons/ encontrada: se usan los iconos del juego." : "No hay carpeta icons/ junto a la herramienta: se usan glifos propios (ver LEEME).";
+  $("iconInfo").textContent = iconsFound ? "Carpeta icons/ encontrada: se usan los iconos del juego." : location.protocol === "file:" ? "No hay carpeta icons/ junto a la herramienta: se usan glifos propios (ver README)." : "En la versión web se usan glifos propios; los iconos del juego solo funcionan abriendo el archivo descargado (ver README).";
 }
 function renderExt(plan) {
   const raws = Object.keys(Engine.OPTS).sort((a, b) => nm(a).localeCompare(nm(b)));
@@ -323,5 +323,6 @@ $("dbinfo").textContent = `Base de datos generada el ${DB.meta.generated} desde 
 document.body.insertAdjacentHTML("afterbegin", Glyphs.defs());
 render();
 // iconos del juego opcionales: carpeta icons/ junto al HTML
-{ const img = new Image(); img.onload = () => { iconsFound = true; render(); }; img.src = "icons/Desc_IronPlate_C.png"; }
+// solo al abrirlo como archivo local: en la web no se publican iconos y la comprobación daría un 404 en consola
+if (location.protocol === "file:") { const img = new Image(); img.onload = () => { iconsFound = true; render(); }; img.src = "icons/Desc_IronPlate_C.png"; }
 }

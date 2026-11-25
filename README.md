@@ -1,4 +1,6 @@
-# Planificador FICSIT (Satisfactory)
+# Planificador de fábricas para Satisfactory
+
+*Factory Planner for Satisfactory*
 
 Herramienta para calcular fábricas de Satisfactory: qué recetas usar, cuántas máquinas construir, qué materias primas y cuánta energía hacen falta. Cubre sólidos, fluidos, subproductos, recetas alternativas, overclock, Somersloops y la cadena nuclear.
 
@@ -60,3 +62,15 @@ El contexto técnico (arquitectura, decisiones, reglas y pendientes) está en `C
 - **Generación de energía:** no se planifica, salvo los residuos de la central nuclear.
 - **Máximo del mapa:** corresponde al mapa por defecto (wiki, nodos de la 1.x). Si usas nodos aleatorios de la 1.2, cambia los límites a mano.
 - **Desglose del árbol:** es bruto, no descuenta subproductos; los totales netos están en *Producción*.
+
+## Licencia y avisos
+
+- **Código:** bajo licencia MIT (ver [`LICENSE`](LICENSE)).
+- **Datos del juego:** los nombres de objetos, recetas, edificios y sus cifras (`data/satisfactory_db.json`, también incluidos dentro de `Planificador.html`) proceden de `CommunityResources/Docs` del juego y son propiedad de Coffee Stain Studios. No están cubiertos por la licencia MIT.
+- **Máximo del mapa:** las cifras de máximo por recurso se han tomado de la [wiki de Satisfactory](https://satisfactory.wiki.gg/).
+- **Iconos:** el repositorio no incluye iconos ni capturas del juego; los glifos que usa la herramienta son propios.
+- **Herramienta no oficial:** es un proyecto gratuito y de aficionado, no oficial y no afiliado a Coffee Stain Studios ni respaldado por ella. Satisfactory es una marca de Coffee Stain Studios.
+
+## Créditos
+
+Creado por Adrián Guerra (Shirosaki Ōkami).
