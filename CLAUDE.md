@@ -1,6 +1,6 @@
-# CLAUDE.md: contexto de desarrollo del Planificador FICSIT
+# CLAUDE.md: contexto de desarrollo del Planificador de fábricas para Satisfactory
 
-Documento de continuidad para Claude Code. `LEEME.md` es para quien **usa** la herramienta; este archivo es para quien la **desarrolla**. Léelo entero antes de tocar nada.
+Documento de continuidad para Claude Code. `README.md` es para quien **usa** la herramienta; este archivo es para quien la **desarrolla**. Léelo entero antes de tocar nada.
 
 ## Qué es
 
@@ -8,6 +8,8 @@ Planificador de fábricas para **Satisfactory 1.x**: dado un conjunto de piezas 
 
 - **Entregable:** `Planificador.html`. Un único archivo autocontenido (datos, CSS y JS dentro) que funciona abriéndolo con doble clic (`file://`), sin servidor ni conexión. Es lo que se reparte a otros jugadores.
 - **Objetivo del repositorio:** herramienta comunitaria, de código abierto. Solo puede contener archivos que se puedan compartir (ver «Reglas»).
+- **Nombre visible:** «Planificador de fábricas para Satisfactory» (en inglés, «Factory Planner for Satisfactory»). Sustituye a «Planificador FICSIT» para que no parezca oficial. La clave de `localStorage` sigue siendo `ficsit-planner-v2` a propósito (cambiarla borraría la configuración guardada).
+- **Autoría:** Adrián Guerra (nombre del portfolio; es el que figura en `LICENSE` y en los créditos), alias creativo Shirosaki Ōkami. Créditos en el README: «Creado por Adrián Guerra (Shirosaki Ōkami)».
 - **Idioma:** interfaz y documentación en español; nombres de objetos en español o inglés (selector). El usuario responde mejor a explicaciones directas, críticas y contrastadas, en tono informal.
 
 ## Estructura
@@ -78,7 +80,8 @@ Flujo obligatorio tras cambiar código: `python build.py` → `node tests/test_e
   - `cfg` es global (mundo, desbloqueos); `plans` son las fábricas.
 - **Cambios:** todo pasa por `set(mut)` (historial para deshacer, guardar, render diferido con `setTimeout(0)` para no perder el foco al tabular). El render restaura el foco por `data-fk`.
 - **Seguridad:** todo texto que venga de datos se escapa con `esc()` antes de entrar en HTML.
-- **Iconos:** si existe `icons/Desc_IronPlate_C.png`, se usan PNG del juego; cada `<img>` que falle se sustituye por su glifo (listener de `error` en captura).
+- **Iconos:** si existe `icons/Desc_IronPlate_C.png`, se usan PNG del juego; cada `<img>` que falle se sustituye por su glifo (listener de `error` en captura). La comprobación solo se hace con `location.protocol === "file:"`: en la web no hay iconos (copyright) y daría un 404 en consola.
+- **Tema:** sigue al sistema (`color-scheme: light dark` + `light-dark()`). `styles.css` ya tiene reglas `:root[data-theme=light|dark]`, pero nada las activa todavía (ver «Pendiente»).
 - **Sankey:** niveles = `Engine.depths()` (camino más largo, seguro ante ciclos). Iterar sobre los enlaces disparaba el ancho a más de 11.000 px con bucles de reciclaje.
 
 ## Flujo de git (gitflow)
@@ -86,29 +89,34 @@ Flujo obligatorio tras cambiar código: `python build.py` → `node tests/test_e
 - `main`: solo versiones publicadas; cada una con etiqueta `vX.Y.Z` (la primera: `v2.0.0`). `develop`: integración.
 - Trabajo nuevo en `feature/<nombre-corto>` creada desde `develop`; correcciones urgentes en `hotfix/*` desde `main`; versiones en `release/X.Y.Z`.
 - El usuario gestiona git con Fork (tiene la integración de Git Flow). Claude Code puede crear ramas `feature/*` y preparar commits, pero **no hace commit, merge ni push sin permiso explícito**.
+- Los commits usan el correo noreply de GitHub del autor (`user.email` local del repositorio), nunca el personal.
 - Mensajes de commit en español, en imperativo y concretos (p. ej. «Añade planificación de generadores»).
+- **Finales de línea:** LF en todo el repositorio (`.gitattributes` con `* text=auto eol=lf`); `build.py` escribe siempre con `newline="
+"`, así que un build sin cambios no deja `Planificador.html` modificado.
 - `Planificador.html` y `data/satisfactory_db.json` se versionan (son el entregable), pero se regeneran siempre con `build.py` y `docs_to_db.py` antes de cada commit.
 
 ## Reglas del proyecto
 
 1. **Nada con copyright en el repo:** ni iconos del juego (están en `.gitignore`), ni Docs.json completos, ni capturas del juego. Los glifos son propios.
-2. **Datos derivados de Docs.json:** `data/satisfactory_db.json` contiene datos derivados de los Docs del juego (© Coffee Stain Studios, sin licencia explícita). Es práctica habitual en herramientas comunitarias, pero hay que indicarlo en el README y en la licencia (la licencia del código no cubre esos datos).
+2. **Datos derivados de Docs.json:** `data/satisfactory_db.json` contiene datos derivados de los Docs del juego (© Coffee Stain Studios, sin licencia explícita). Es práctica habitual en herramientas comunitarias; se indica en la sección «Licencia y avisos» del README (la licencia del código no cubre esos datos). `LICENSE` lleva el texto MIT sin añadidos para que GitHub la reconozca; el alcance se explica en el README.
 3. **Sin dependencias en tiempo de ejecución** salvo Google Fonts (con *fallback*). Debe funcionar por `file://` y sin conexión.
 4. **No editar `Planificador.html` ni `data/*.json` a mano:** se regeneran.
 5. **Cualquier cambio en el simplex** debe pasar `compare_highs.py` con 0 discrepancias.
 
 ## Pendiente (por prioridad)
 
-1. **Repositorio:** lo crea el usuario con Fork (público). Claude Code no hace commits ni push sin permiso. Antes del primer commit: renombrar `LEEME.md` a `README.md` (GitHub lo muestra en portada), añadir `LICENSE` (MIT recomendada; confirmar con el usuario) y una sección «Licencia y avisos»: código bajo la licencia elegida; datos del juego © Coffee Stain Studios, no cubiertos; herramienta no oficial ni afiliada.
-2. **Publicación:** NO usar GitHub Pages (el usuario ya lo usa para otra cosa). Se integrará en una web suya alojada en Cloudflare: basta con servir `Planificador.html` como estático (opcional: despliegue automático desde el repositorio). También se reparte como descarga.
+1. **Enlace a la versión online:** cuando exista una versión publicada (ver punto 2), añadir el enlace al README (créditos) y quizá al pie del HTML. Hasta entonces, ningún enlace.
+2. **Publicación (aplazada):** de momento no se publica en ninguna web; solo se comparte el archivo `Planificador.html`. NO usar GitHub Pages. Se tratará desde el proyecto de la web personal de Shirosaki Ōkami (Astro en Cloudflare). Opción candidata: **A**, copiar el HTML de cada versión etiquetada en `main` a `public/<ruta>/index.html` de la web y servirlo bajo esa subruta, siempre con barra final (`/ruta/`) para que las rutas relativas funcionen. Otras opciones valoradas: despliegue propio desde este repositorio (un proyecto de Cloudflare vive en un dominio, no en una ruta; haría falta un Worker) o integrarlo en el repositorio de la web (submódulo o GitHub Action).
 3. **Energía:** planificar la generación (generadores de carbón/combustible/nuclear) y sumar los Pressurizers de los Resource Well (150 MW por pozo; ahora solo se avisa).
 4. **Sankey:** más legible en fábricas grandes (agrupar nodos pequeños, zoom/arrastre, resaltar un objeto al pasar el ratón).
 5. **Iconos:** probar una extracción automática por línea de comandos (p. ej. herramientas .NET basadas en CUE4Parse) como alternativa a FModel.
-6. **Otros:** filtro de recetas por tier/hito desbloqueado; exportar la lista de construcción (CSV/Markdown); comparar dos fábricas.
+6. **Selector de tema:** claro / oscuro / sistema, guardado en el estado y aplicado con `data-theme` en `<html>` (las reglas CSS ya existen).
+7. **Otros:** filtro de recetas por tier/hito desbloqueado; exportar la lista de construcción (CSV/Markdown); comparar dos fábricas.
 
 ## Historia breve
 
 - **Excel «Fabricación de piezas»:** matriz de fórmulas con errores sistemáticos; aparcado.
 - **v1 HTML:** datos de la wiki transcritos, solver manual.
+- **Preparación del repositorio público (11/2026):** `README.md`, `LICENSE` MIT, avisos, créditos, nombre visible nuevo y finales de línea LF.
 - **v2 (actual):** datos de los Docs del juego, optimizador lineal validado con HiGHS (177 casos, error relativo máximo 3e-14), Somersloops, varias fábricas, alternativas desbloqueables, Sankey, glifos, ES/EN.
 - **Versión publicada en claude.ai:** existió como página privada de pruebas y se eliminó el 25/11/2026. La referencia es este repositorio.
