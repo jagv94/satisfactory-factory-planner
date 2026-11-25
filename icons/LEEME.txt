@@ -1,0 +1,9 @@
+Carpeta opcional para los iconos reales del juego.
+
+Si dejas aquí archivos PNG con el nombre interno de cada objeto (por ejemplo Desc_IronPlate_C.png),
+el planificador los usa automáticamente en lugar de los glifos propios.
+Para generarlos: exporta los iconos con FModel desde tu instalación y ejecuta tools\copiar_iconos.ps1
+(instrucciones en LEEME.md).
+
+Los iconos son material con copyright de Coffee Stain Studios: úsalos solo en tu copia y con tus amigos
+que tienen el juego; no los publiques en una web.

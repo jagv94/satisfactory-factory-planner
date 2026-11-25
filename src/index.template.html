@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Planificador FICSIT</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=Barlow:wght@400;500;600&display=swap" rel="stylesheet">
+<style>/*__CSS__*/</style>
+</head>
+<body>
+<header class="top">
+  <div class="head">
+    <div class="ttl"><h1>Planificador FICSIT</h1><p id="sub"></p></div>
+    <div class="plans">
+      <label>Fábrica <select id="plan"></select></label>
+      <label>Nombre <input id="pname" type="text" maxlength="40"></label>
+      <div class="row"><button id="pNew">Nueva</button><button id="pDup">Duplicar</button><button id="pDel">Borrar</button><button id="undo" title="Ctrl+Z">Deshacer</button></div>
+    </div>
+  </div>
+</header>
+<div class="kbar"><div class="kpis" id="kpis"></div><div class="warn" id="warns"></div></div>
+<main>
+  <div class="col" id="ctrl">
+    <section class="card">
+      <h2>Objetivos</h2>
+      <div class="row">
+        <label class="grow">Preset <select id="preset"></select></label>
+        <label>Cantidad (/min) <input id="base" type="number" min="0" step="0.1" value="1"></label>
+        <button class="pri" id="apply">Aplicar</button>
+      </div>
+      <p class="hint">Sustituye la lista; luego ajusta cada pieza. El coste suma, para cada materia prima, el % que usa del máximo del mapa: sirve para ver qué piezas son las más exigentes.</p>
+      <div id="targets"></div>
+      <div class="row add">
+        <input id="addItem" list="itemlist" placeholder="Añadir pieza…" autocomplete="off" class="grow" aria-label="Pieza a añadir">
+        <input id="addRate" type="number" min="0" step="0.1" value="1" aria-label="Cantidad por minuto">
+        <button id="add">Añadir</button>
+      </div>
+      <datalist id="itemlist"></datalist>
+    </section>
+    <section class="card">
+      <h2>Cálculo</h2>
+      <div class="seg" role="group" aria-label="Modo de cálculo"><button id="mManual">Manual</button><button id="mOpt">Optimizar</button></div>
+      <p class="hint" id="modeHint"></p>
+      <div id="optBox">
+        <label>Criterio
+          <select id="objective"><option value="weighted">Mínimo de recursos (ponderado por escasez)</option><option value="power">Mínima potencia</option><option value="machines">Mínimo de máquinas</option></select></label>
+        <label class="chk"><input id="maximize" type="checkbox"> Maximizar los objetivos dentro de los límites de recursos</label>
+        <label class="chk"><input id="allowManual" type="checkbox"> Permitir recursos recolectados a mano (hojas, madera, restos…)</label>
+        <p class="hint" id="banInfo"></p>
+      </div>
+    </section>
+    <section class="card">
+      <h2>Ajustes</h2>
+      <div class="grid2">
+        <label>Reloj por defecto (%) <input id="clock" type="number" min="1" max="250" step="1"></label>
+        <label>Cinta <select id="belt"></select></label>
+        <label>Tubería <select id="pipe"></select></label>
+        <label>Nombres <select id="lang"><option value="es">Español</option><option value="en">English</option></select></label>
+        <label>Iconos <select id="icons"><option value="auto">Del juego si existen</option><option value="glyph">Glifos propios</option></select></label>
+        <label>Agrupar producción <select id="group"><option value="level">Por nivel</option><option value="building">Por máquina</option></select></label>
+      </div>
+      <p class="hint" id="iconInfo"></p>
+    </section>
+    <section class="card">
+      <h2>Datos</h2>
+      <div class="row"><button id="exportS">Copiar configuración</button><button id="dlS">Descargar configuración</button><button id="reset">Restablecer todo</button></div>
+      <textarea id="io" placeholder="Pega aquí una configuración y pulsa Importar" aria-label="Configuración en JSON"></textarea>
+      <div class="row"><button id="importS">Importar configuración</button><label>Importar desde archivo <input id="cfgfile" type="file" accept=".json"></label></div>
+      <div class="row"><label>Base de datos propia (.json) <input id="dbfile" type="file" accept=".json"></label><button id="dlDB">Descargar base de datos</button></div>
+      <p class="hint" id="dbinfo"></p>
+    </section>
+  </div>
+  <section class="card" id="rawc">
+    <h2 id="rawTitle">Materias primas</h2>
+    <div class="bars" id="raw"></div>
+  </section>
+  <section class="card" id="resc">
+    <div class="tabs" id="tabs" role="tablist">
+      <button role="tab" data-t="prod">Producción</button><button role="tab" data-t="sankey">Diagrama</button><button role="tab" data-t="tree">Árbol</button>
+      <button role="tab" data-t="ext">Extracción</button><button role="tab" data-t="mach">Máquinas</button><button role="tab" data-t="surp">Excedentes</button><button role="tab" data-t="alts">Alternativas</button>
+    </div>
+    <div id="v-prod"><input id="q" type="search" placeholder="Buscar en la tabla…" aria-label="Buscar objeto" class="search">
+      <div class="scroll"><table id="prod" class="prod"></table></div>
+      <p class="hint">Máquinas = producción ÷ salida por máquina (con su reloj y Somersloops). "Real" es el reloj uniforme para que todas vayan justas. Líneas = cintas o tuberías del tier elegido.</p></div>
+    <div id="v-sankey" hidden><p class="hint top0">Flujo de materiales de izquierda (materias primas) a derecha (objetivos). Trazo discontinuo: subproducto. Pasa el ratón para ver cantidades.</p><div class="scroll"><svg id="sk" role="img" aria-label="Diagrama de flujo de la fábrica"></svg></div></div>
+    <div id="v-tree" hidden><p class="hint top0">Desglose recursivo bruto de cada objetivo con las recetas del plan (no descuenta subproductos; el neto está en Producción).</p><div class="tree" id="tree"></div></div>
+    <div id="v-ext" hidden>
+      <div class="scroll"><table id="exttab" class="ext"></table></div>
+      <div class="row" style="margin-top:8px"><button id="limMap">Límites = máximo del mapa</button><button id="limNone">Quitar límites</button></div>
+      <p class="hint">El límite (si lo pones) se respeta al optimizar. Máximo del mapa: todos los nodos con Mk.3 al 250 % (mapa por defecto, sin nodos aleatorios de la 1.2).</p>
+    </div>
+    <div id="v-mach" hidden><div class="scroll"><table id="mach"></table></div><p class="hint" id="machNote"></p></div>
+    <div id="v-surp" hidden><div class="scroll"><table id="surp"></table></div><p class="hint">Llévalos a un AWESOME Sink o elige recetas que los consuman.</p></div>
+    <div id="v-alts" hidden>
+      <div class="row"><input id="aq" type="search" placeholder="Buscar alternativa…" class="grow" aria-label="Buscar alternativa">
+        <select id="af" aria-label="Filtro"><option value="all">Todas</option><option value="on">Desbloqueadas</option><option value="off">Bloqueadas</option></select>
+        <button id="altAll">Marcar todas</button><button id="altNone">Ninguna</button></div>
+      <p class="hint" id="altCount"></p>
+      <div id="alts" class="alts"></div>
+    </div>
+  </section>
+</main>
+<footer>Planificador FICSIT · datos generados desde CommunityResources/Docs de tu instalación. Satisfactory es de Coffee Stain Studios; esta herramienta no está afiliada.</footer>
+<script type="application/json" id="db">/*__DB__*/</script>
+<script>/*__JS__*/</script>
+</body>
+</html>

@@ -1,0 +1,165 @@
+"""Genera data/satisfactory_db.json a partir de los Docs oficiales del juego.
+
+Uso:  python docs_to_db.py "<Satisfactory>/CommunityResources/Docs" ../data/satisfactory_db.json
+Lee en-US.json y es-ES.json (UTF-16). Solo incluye recetas de máquinas de producción
+(sin edificios, equipo ni FICSMAS) y añade el consumo de combustible nuclear como receta.
+"""
+import json, re, sys, os
+
+DOCS, OUT = sys.argv[1], sys.argv[2]
+
+def load(lang):
+    raw = open(os.path.join(DOCS, f"{lang}.json"), "rb").read()
+    enc = "utf-16" if raw[:2] in (b"\xff\xfe", b"\xfe\xff") else "utf-8-sig"
+    return {e["NativeClass"].split(".")[-1].rstrip("'"): e["Classes"] for e in json.loads(raw.decode(enc))}
+
+EN, ES = load("en-US"), load("es-ES")
+es_name = {}
+for cls, lst in ES.items():
+    for c in lst:
+        if "mDisplayName" in c: es_name[c["ClassName"]] = c["mDisplayName"]
+
+def cls_of(path):  # ".../Desc_IronPlate.Desc_IronPlate_C'" -> Desc_IronPlate_C
+    return path.rstrip("'\"").split(".")[-1]
+
+def parse_amounts(s):
+    return [(cls_of(a), float(b)) for a, b in re.findall(r'ItemClass="([^"]+)",Amount=(\d+(?:\.\d+)?)', s or "")]
+
+def f(x, d=0.0):
+    try: return float(x)
+    except (TypeError, ValueError): return d
+
+# ---------- objetos
+ITEM_CLASSES = [k for k in EN if k.startswith("FGItemDescriptor") or k in (
+    "FGResourceDescriptor", "FGConsumableDescriptor", "FGEquipmentDescriptor", "FGPowerShardDescriptor",
+    "FGAmmoTypeProjectile", "FGAmmoTypeInstantHit", "FGAmmoTypeSpreadshot")]
+items = {}
+for k in ITEM_CLASSES:
+    for c in EN[k]:
+        form = {"RF_SOLID": "solid", "RF_LIQUID": "liquid", "RF_GAS": "gas"}.get(c.get("mForm"), "solid")
+        col = c.get("mGasColor" if form == "gas" else "mFluidColor", "")
+        m = dict(re.findall(r"([RGBA])=(\d+)", col or ""))
+        icon = (c.get("mSmallIcon") or "").split(" ")[-1].split(".")[0].split("/")
+        items[c["ClassName"]] = {
+            "en": c["mDisplayName"], "es": es_name.get(c["ClassName"], c["mDisplayName"]), "form": form,
+            "raw": k == "FGResourceDescriptor", "sink": int(f(c.get("mResourceSinkPoints"))),
+            "color": "#%02x%02x%02x" % (int(m.get("R", 0)), int(m.get("G", 0)), int(m.get("B", 0))) if form != "solid" and m else None,
+            "icon": icon[-1] if icon and icon[-1] else None,
+            "iconPath": "/".join(icon[1:-1]) if len(icon) > 2 else None,
+            "energy": f(c.get("mEnergyValue")),
+        }
+
+# ---------- máquinas
+buildings = {}
+for k in ("FGBuildableManufacturer", "FGBuildableManufacturerVariablePower"):
+    for c in EN[k]:
+        buildings[c["ClassName"]] = {
+            "en": c["mDisplayName"], "es": es_name.get(c["ClassName"], c["mDisplayName"]),
+            "power": f(c.get("mPowerConsumption")), "exp": f(c.get("mPowerConsumptionExponent"), 1.321929),
+            "slots": int(f(c.get("mProductionShardSlotSize"))), "boost": f(c.get("mProductionShardBoostMultiplier")),
+            "boostExp": f(c.get("mProductionBoostPowerConsumptionExponent"), 2), "variable": k.endswith("VariablePower"),
+        }
+gen = EN["FGBuildableGeneratorNuclear"][0]
+buildings[gen["ClassName"]] = {"en": "Nuclear Power Plant", "es": es_name.get(gen["ClassName"], "Central nuclear"),
+    "power": -f(gen["mPowerProduction"]), "exp": 1, "slots": 0, "boost": 0, "boostExp": 2, "variable": False, "generator": True}
+
+# ---------- desbloqueos (esquemas)
+unlock = {}
+for s in EN["FGSchematic"]:
+    for u in s.get("mUnlocks", []):
+        for r in re.findall(r"([A-Za-z0-9_]+_C)'", u.get("mRecipes", "")):
+            prev = unlock.get(r)
+            info = {"type": s["mType"].replace("EST_", ""), "tier": int(f(s.get("mTechTier"))), "en": s["mDisplayName"],
+                    "es": es_name.get(s["ClassName"], s["mDisplayName"])}
+            if not prev or (prev["type"] != "Alternate" and info["type"] == "Alternate"): unlock[r] = info
+
+# ---------- recetas
+recipes = []
+for c in EN["FGRecipe"]:
+    if "EV_Christmas" in (c.get("mRelevantEvents") or ""): continue
+    made = [cls_of(p) for p in re.findall(r'"([^"]+)"', c.get("mProducedIn") or "")]
+    made = [m for m in made if m in buildings]
+    if not made: continue
+    dur = f(c["mManufactoringDuration"])
+    def per_min(lst):
+        out = {}
+        for it, a in lst:
+            if it not in items: return None
+            q = a / (1000 if items[it]["form"] != "solid" else 1) * 60 / dur
+            out[it] = round(out.get(it, 0) + q, 6)
+        return out
+    if re.search(r"Xmas|Ficsmas|Gift|Snow|Candy|Firework", c["mIngredients"] + c["mProduct"] + c["ClassName"], re.I): continue
+    ins, outs = per_min(parse_amounts(c["mIngredients"])), per_min(parse_amounts(c["mProduct"]))
+    if ins is None or outs is None or not outs: continue
+    b = made[0]
+    u = unlock.get(c["ClassName"], {})
+    name_en, name_es = c["mDisplayName"], es_name.get(c["ClassName"], c["mDisplayName"])
+    alt = u.get("type") == "Alternate"
+    r = {"id": c["ClassName"], "en": re.sub(r"^Alternate: ", "", name_en), "es": re.sub(r"^Alternativa: ", "", name_es),
+         "alt": alt, "building": b, "time": dur, "in": ins, "out": outs,
+         "unlock": {"type": u.get("type", "?"), "tier": u.get("tier", 0), "en": u.get("en", ""), "es": u.get("es", "")}}
+    if buildings[b]["variable"]:
+        lo = f(c.get("mVariablePowerConsumptionConstant")); hi = lo + f(c.get("mVariablePowerConsumptionFactor"))
+        r["powerRange"] = [lo, hi]; r["power"] = (lo + hi) / 2
+    recipes.append(r)
+
+# combustible nuclear -> residuos
+for fu in gen["mFuel"]:
+    fuel, waste = fu["mFuelClass"], fu.get("mByproduct")
+    if not waste: continue
+    e = items[fuel]["energy"]; pw = f(gen["mPowerProduction"])
+    rods = pw * 60 / e
+    water = pw * f(gen["mSupplementalToPowerRatio"]) * 60 / 1000
+    recipes.append({"id": "Gen_" + fuel, "en": items[waste]["en"] + " (Nuclear Power Plant)", "es": items[waste]["es"] + " (central nuclear)",
+        "alt": False, "building": gen["ClassName"], "time": e / pw, "in": {fuel: round(rods, 6), fu["mSupplementalResourceClass"]: round(water, 6)},
+        "out": {waste: round(rods * f(fu["mByproductAmount"]), 6)}, "unlock": {"type": "Milestone", "tier": 8, "en": "Nuclear Power", "es": "Energía nuclear"}})
+
+used = set()
+for r in recipes: used |= set(r["in"]) | set(r["out"])
+# ---------- extractores
+ex = {c["ClassName"]: c for k in ("FGBuildableResourceExtractor", "FGBuildableWaterPump", "FGBuildableFrackingExtractor") for c in EN[k]}
+def rate(c, liquid): return f(c["mItemsPerCycle"]) / f(c["mExtractCycleTime"]) * 60 / (1000 if liquid else 1)
+raw_solid = [k for k, v in items.items() if v["raw"] and v["form"] == "solid"]
+press = EN["FGBuildableFrackingActivator"][0]
+extractors = {
+  "miner": {"tiers": {f"Mk.{n}": {"id": f"Build_MinerMk{n}_C", "rate": rate(ex[f"Build_MinerMk{n}_C"], False), "power": f(ex[f"Build_MinerMk{n}_C"]["mPowerConsumption"])} for n in (1, 2, 3)},
+            "items": raw_solid, "en": "Miner", "es": es_name.get("Build_MinerMk1_C", "Minero").replace(" Mk.1", "")},
+  "water": {"rate": rate(ex["Build_WaterPump_C"], True), "power": f(ex["Build_WaterPump_C"]["mPowerConsumption"]), "items": ["Desc_Water_C"], "purity": False,
+            "en": "Water Extractor", "es": es_name.get("Build_WaterPump_C")},
+  "oil": {"rate": rate(ex["Build_OilPump_C"], True), "power": f(ex["Build_OilPump_C"]["mPowerConsumption"]), "items": ["Desc_LiquidOil_C"], "purity": True,
+          "en": "Oil Extractor", "es": es_name.get("Build_OilPump_C")},
+  "well": {"rate": rate(ex["Build_FrackingExtractor_C"], True), "power": 0, "items": ["Desc_LiquidOil_C", "Desc_NitrogenGas_C", "Desc_Water_C"], "purity": True,
+           "en": "Resource Well Extractor", "es": es_name.get("Build_FrackingExtractor_C"), "pressurizer": f(press["mPowerConsumption"])},
+}
+purity = {"Impure": 0.5, "Normal": 1.0, "Pure": 2.0}
+belts = {f"Mk.{n}": f([c for c in EN["FGBuildableConveyorBelt"] if c["ClassName"] == f"Build_ConveyorBeltMk{n}_C"][0]["mSpeed"]) / 2 for n in range(1, 7)}
+pipes = {"Mk.1": f([c for c in EN["FGBuildablePipeline"] if c["ClassName"] == "Build_Pipeline_C"][0]["mFlowLimit"]) * 60,
+         "Mk.2": f([c for c in EN["FGBuildablePipeline"] if c["ClassName"] == "Build_PipelineMK2_C"][0]["mFlowLimit"]) * 60}
+# Máximo del mapa (Mk.3 / extractor al 250 %, mapa por defecto). Fuente: satisfactory.wiki.gg/wiki/Resource_Node y /Nitrogen_Gas
+world = {"Desc_OreIron_C": 92100, "Desc_OreGold_C": 15000, "Desc_OreCopper_C": 36900, "Desc_Stone_C": 69300, "Desc_Coal_C": 42300,
+         "Desc_RawQuartz_C": 13500, "Desc_Sulfur_C": 10800, "Desc_OreBauxite_C": 12300, "Desc_OreUranium_C": 2100, "Desc_SAM_C": 10200,
+         "Desc_LiquidOil_C": 12600, "Desc_NitrogenGas_C": 12000}
+# objetos recolectados a mano (sin receta ni extractor)
+prim = {list(r["out"])[0] for r in recipes}
+manual = sorted(k for k in used if not items[k]["raw"] and k not in prim and not any(k in r["out"] for r in recipes))
+items = {k: v for k, v in items.items() if k in used or v["raw"]}
+for k in manual: items[k]["manual"] = True
+
+# colores de materias primas (paleta propia, inspirada en el juego)
+RAWCOL = {"Desc_OreIron_C": "#b9573f", "Desc_OreCopper_C": "#d9783a", "Desc_Stone_C": "#cbbfa7", "Desc_Coal_C": "#3d3d42",
+          "Desc_OreGold_C": "#d8a630", "Desc_RawQuartz_C": "#e08fb8", "Desc_Sulfur_C": "#e2d34a", "Desc_OreBauxite_C": "#a8523a",
+          "Desc_OreUranium_C": "#7fd14b", "Desc_SAM_C": "#8a4fd8", "Desc_Water_C": "#3b8fd9", "Desc_LiquidOil_C": "#2a2133",
+          "Desc_NitrogenGas_C": "#a9b8c8"}
+for k, v in RAWCOL.items():
+    if k in items: items[k]["color"] = v
+
+db = {"meta": {"game": "Satisfactory", "source": "CommunityResources/Docs (en-US, es-ES)", "generated": "2026-11-25",
+               "docsMtime": os.path.getmtime(os.path.join(DOCS, "en-US.json")), "units": "por minuto; fluidos en m³/min"},
+      "items": items, "recipes": recipes, "buildings": buildings, "extractors": extractors, "purity": purity,
+      "belts": belts, "pipes": pipes, "world": world,
+      "presets": {
+        "Fase 5 del Space Elevator": ["Desc_SpaceElevatorPart_9_C", "Desc_SpaceElevatorPart_10_C", "Desc_SpaceElevatorPart_11_C", "Desc_SpaceElevatorPart_12_C"],
+      }}
+os.makedirs(os.path.dirname(OUT) or ".", exist_ok=True)
+json.dump(db, open(OUT, "w", encoding="utf-8"), ensure_ascii=False, separators=(",", ":"))
+print(f"{len(items)} objetos · {len(recipes)} recetas ({sum(r['alt'] for r in recipes)} alternativas) · {len(manual)} manuales")

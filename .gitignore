@@ -1,0 +1,14 @@
+# Iconos del juego: copyright de Coffee Stain Studios, no se versionan
+icons/*
+!icons/LEEME.txt
+
+# Archivos de prueba y temporales
+tests/lp_cases.json
+__pycache__/
+*.pyc
+node_modules/
+
+# Sistema
+.DS_Store
+Thumbs.db
+desktop.ini
