@@ -2,20 +2,25 @@
 // Se ejecuta igual en el navegador y en Node (tests).
 const Engine = (() => {
   let DB, R, PRIM, PROD, OPTS;
+  const POWER = "Power_MW";  // objeto sintético: MW que producen los generadores y consumen las máquinas
   const DEF = {Desc_GenericBiomass_C: "Recipe_Biomass_Wood_C", Desc_AlienProtein_C: "Recipe_Protein_Hog_C",
-    Desc_CrystalShard_C: "Recipe_PowerCrystalShard_1_C", Desc_FicsiteIngot_C: "Recipe_FicsiteIngot_Iron_C"};
+    Desc_CrystalShard_C: "Recipe_PowerCrystalShard_1_C", Desc_FicsiteIngot_C: "Recipe_FicsiteIngot_Iron_C", [POWER]: "Gen_Desc_Coal_C"};
   const EXP = 1.321929;
+  const isGen = r => !!(DB.buildings[r.building] || {}).generator;
+  const energyOn = plan => !!plan && plan.energy === "gen";
 
   function init(db) {
     DB = db; R = {}; PRIM = {}; PROD = {}; OPTS = {};
     for (const r of DB.recipes) {
       R[r.id] = r;
-      const p = Object.keys(r.out)[0];
-      (PRIM[p] = PRIM[p] || []).push(r.id);
+      // un generador es receta principal de la energía y también de su residuo (la central nuclear produce residuos)
+      for (const p of isGen(r) ? Object.keys(r.out) : [Object.keys(r.out)[0]]) (PRIM[p] = PRIM[p] || []).push(r.id);
       for (const o in r.out) (PROD[o] = PROD[o] || []).push(r.id);
     }
     for (const [k, e] of Object.entries(DB.extractors)) for (const i of e.items) (OPTS[i] = OPTS[i] || []).push("x:" + k);
     for (const k in PRIM) PRIM[k].sort((a, b) => rank(a) - rank(b) || R[a].en.localeCompare(R[b].en));
+    // generadores: de menor a mayor potencia (biomasa, carbón, combustible, nuclear) y, dentro, por nombre
+    if (PRIM[POWER]) PRIM[POWER].sort((a, b) => DB.buildings[R[b].building].power - DB.buildings[R[a].building].power || R[a].en.localeCompare(R[b].en));
     return {R, PRIM};
   }
   const rank = id => { const r = R[id], it = DB.items[Object.keys(r.out)[0]];
@@ -49,7 +54,14 @@ const Engine = (() => {
   function recCfg(cfg, plan, id) { const r = (plan.rc || {})[id] || {}; return {clock: r.clock ?? cfg.clock ?? 1, sloops: r.sloops || 0}; }
 
   // proceso = una máquina funcionando con su configuración: entradas/salidas por minuto
+  // proceso con energía: con «generar», cada máquina consume Power_MW (su potencia y, en pozos, su parte de los Pressurizers)
   function proc(cfg, plan, sel, item) {
+    const p = proc0(cfg, plan, sel, item);
+    if (p.kind === "extract" && p.ext === "well") { const s = ((plan || {})._ps || {})[item] || 0; if (s) { p.pshare = s; p.power += s; } }
+    if (energyOn(plan) && p.power > 0) p.in[POWER] = p.power;
+    return p;
+  }
+  function proc0(cfg, plan, sel, item) {
     if (sel === "import" || sel === "manual") return {id: sel + ":" + item, kind: sel, item, in: {}, out: {[item]: 1}, power: 0, clock: 1, sloops: 0, building: null};
     if (sel.startsWith("x:")) {
       const k = sel.slice(2), e = DB.extractors[k], c = extCfg(cfg, item);
@@ -95,8 +107,10 @@ const Engine = (() => {
   }
 
   // ---------- modo manual: una receta por objeto, sistema lineal cuadrado; los negativos pasan a excedente
-  function solveManual(cfg, plan, targets) {
-    const d = demand(targets ?? plan.targets);
+  // energía externa disponible: se descuenta de la fila de Power_MW (no escala con «maximizar»)
+  const supply = plan => energyOn(plan) && plan.gridMW > 0 ? {[POWER]: +plan.gridMW} : {};
+  function solveManual0(cfg, plan, targets) {
+    const d = demand(targets ?? plan.targets), sup = supply(plan);
     const act = [], seen = new Set(), P = {}, q = Object.keys(d);
     while (q.length) {
       const i = q.shift(); if (seen.has(i)) continue;
@@ -114,7 +128,7 @@ const Engine = (() => {
         for (const i in p.out) if (i in ix) A[ix[i]][c] += p.out[i];
         for (const i in p.in) if (i in ix) A[ix[i]][c] -= p.in[i];
       });
-      v.forEach((i, r) => A[r][n] = d[i] || 0);
+      v.forEach((i, r) => A[r][n] = (d[i] || 0) - (sup[i] || 0));
       const sol = n ? gauss(A, n) : new Float64Array(0);
       if (!sol) { error = "cycle"; x = {}; break; }
       x = {}; v.forEach((k, c) => x[k] = Math.abs(sol[c]) < 1e-10 ? 0 : sol[c]);
@@ -124,7 +138,7 @@ const Engine = (() => {
       off.add(worst);
     }
     const plan2 = act.filter(i => (x[i] || 0) > 1e-10).map(i => ({p: P[i], x: x[i]}));
-    return {steps: plan2, d, error, byproductOnly: [...off], P};
+    return {steps: plan2, d, error, byproductOnly: [...off], P, supply: sup, energy: energyOn(plan)};
   }
 
   // ---------- simplex de dos fases: min c·x, filas {a:{col:val}, op:'>='|'<='|'=', b}, x>=0
@@ -203,8 +217,8 @@ const Engine = (() => {
   }
 
   // ---------- optimizador: varias recetas por objeto, límites de recursos, objetivos alternativos
-  function solveOpt(cfg, plan, targets, mode) {
-    const d = demand(targets ?? plan.targets);
+  function solveOpt0(cfg, plan, targets, mode) {
+    const d = demand(targets ?? plan.targets), sup = supply(plan);
     const objective = mode || plan.objective || "weighted";
     const procs = [], seenP = new Set(), seenI = new Set(), q = Object.keys(d);
     const add = p => { if (!seenP.has(p.id)) { seenP.add(p.id); procs.push(p); for (const j in p.in) q.push(j); } };
@@ -230,7 +244,7 @@ const Engine = (() => {
       if (p.kind === "import") c[j] = 1e-6;
     });
     if (maxMode) c[tcol] = -1e6;
-    const rows = items.map(i => ({a: {}, op: ">=", b: maxMode ? 0 : d[i] || 0}));
+    const rows = items.map(i => ({a: {}, op: ">=", b: (maxMode ? 0 : d[i] || 0) - (sup[i] || 0)}));
     procs.forEach((p, j) => {
       for (const k in p.out) rows[ix[k]].a[j] = (rows[ix[k]].a[j] || 0) + p.out[k];
       for (const k in p.in) rows[ix[k]].a[j] = (rows[ix[k]].a[j] || 0) - p.in[k];
@@ -244,12 +258,45 @@ const Engine = (() => {
     }
     if (maxMode) rows.push({a: {[tcol]: 1}, op: "<=", b: 1e6});
     const res = simplex(n, c, rows);
-    if (res.status !== "ok") return {steps: [], d, error: res.status, procs};
+    if (res.status !== "ok") return {steps: [], d, error: res.status, procs, supply: sup, energy: energyOn(plan)};
     const steps = procs.map((p, j) => ({p, x: res.x[j]})).filter(s => s.x > 1e-9);
     const scale = maxMode ? res.x[tcol] : 1;
     const d2 = {}; for (const i in d) d2[i] = d[i] * scale;
-    return {steps, d: d2, error: maxMode && scale > 9.99e5 ? "unbounded" : null, scale: maxMode ? scale : null};
+    return {steps, d: d2, error: maxMode && scale > 9.99e5 ? "unbounded" : null, scale: maxMode ? scale : null, supply: sup, energy: energyOn(plan)};
   }
+
+  // ---------- Pressurizers de los Resource Well: el usuario indica cuántos pozos usa por fluido (cfg.ext[item].wells).
+  // Su potencia es fija, pero en el cálculo cada extractor de pozo carga con la parte proporcional
+  // (potencia de los Pressurizers / extractores de ese fluido). Como el número de extractores sale del propio cálculo,
+  // se itera hasta que el reparto coincide con la solución (punto fijo; suele bastar con pocas vueltas).
+  // Como mucho PRESS_MAX vueltas: si no cuadra, se devuelve el error "press" (sin pasos), nunca un resultado a medias.
+  const PRESS_MAX = 12;
+  function pressPower(cfg, item) {
+    const w = DB.extractors.well, c = extCfg(cfg, item), n = +c.wells || 0;
+    return n > 0 ? n * w.pressurizer * Math.pow(c.clock, w.pressurizerExp ?? EXP) : 0;
+  }
+  function withPress(fn) {
+    return (cfg, plan, ...rest) => {
+      const W = {};
+      for (const i of (DB.extractors.well || {}).items || []) { const pw = pressPower(cfg, i); if (pw > 0) W[i] = pw; }
+      if (!Object.keys(W).length) return fn(cfg, plan, ...rest);
+      const wellX = res => { const x = {}; for (const s of res.steps) if (s.p.kind === "extract" && s.p.ext === "well") x[s.p.item] = (x[s.p.item] || 0) + s.x; return x; };
+      // coherente: cada fluido o no usa pozos, o su reparto cubre exactamente la potencia de sus Pressurizers
+      const ok = (x, ps) => Object.keys(W).every(i => (x[i] || 0) <= 1e-9 || Math.abs((ps[i] || 0) * x[i] - W[i]) <= 1e-9 * Math.max(1, W[i]));
+      const max = (plan || {})._pressMax ?? PRESS_MAX;   // _pressMax: solo para pruebas
+      let ps = {}, res = fn(cfg, plan, ...rest);
+      for (let it = 0; !res.error; it++) {
+        const x = wellX(res);
+        if (ok(x, ps)) return Object.assign(res, {pressIter: it});
+        if (it >= max) return {steps: [], d: res.d, error: "press", supply: res.supply, energy: res.energy};
+        const ps2 = {};
+        for (const i in W) ps2[i] = (x[i] || 0) > 1e-9 ? W[i] / x[i] : ps[i] || 0;
+        ps = ps2; res = fn(cfg, Object.assign({}, plan, {_ps: ps}), ...rest);
+      }
+      return res;
+    };
+  }
+  const solveManual = withPress(solveManual0), solveOpt = withPress(solveOpt0);
 
   // ---------- análisis común de un plan
   function analyze(cfg, res) {
@@ -270,14 +317,22 @@ const Engine = (() => {
     });
     const all = new Set([...Object.keys(prod), ...Object.keys(cons), ...Object.keys(res.d)]);
     const balance = {};
-    for (const i of all) balance[i] = {prod: prod[i] || 0, cons: cons[i] || 0, target: res.d[i] || 0, net: (prod[i] || 0) - (cons[i] || 0) - (res.d[i] || 0)};
+    const sup = res.supply || {};
+    for (const i of all) balance[i] = {prod: prod[i] || 0, cons: cons[i] || 0, target: res.d[i] || 0, supply: sup[i] || 0, net: (prod[i] || 0) + (sup[i] || 0) - (cons[i] || 0) - (res.d[i] || 0)};
     const raw = {};
     for (const r of rows) if (r.p.kind === "extract" || r.p.kind === "manual" || r.p.kind === "import") {
       const k = r.p.item; raw[k] = raw[k] || {item: k, rate: 0, build: 0, kinds: new Set(), names: new Set()};
       raw[k].rate += r.rate; raw[k].build += r.build || 0; raw[k].kinds.add(r.p.kind);
     }
     let score = 0; for (const k in raw) if (raw[k].kinds.has("extract") || raw[k].kinds.has("manual")) score += raw[k].rate * rawWeight(k) / 1e4;
-    return {rows, balance, raw: Object.values(raw), score, d: res.d, error: res.error, scale: res.scale};
+    // energía: consumo real (máquinas enteras con reloj uniforme) + Pressurizers; generación de los generadores
+    const wellX = {}; for (const r of rows) if (r.p.kind === "extract" && r.p.ext === "well" && r.build) wellX[r.p.item] = (wellX[r.p.item] || 0) + r.build;
+    const press = Object.keys(wellX).map(item => { const c = extCfg(cfg, item), n = +c.wells || 0; return {item, wells: n, extractors: wellX[item], clock: c.clock, power: pressPower(cfg, item)}; });
+    const pressMW = press.reduce((a, p) => a + p.power, 0);
+    const consMW = rows.reduce((a, r) => a + (r.power > 0 ? r.power : 0), 0) + pressMW, genMW = -rows.reduce((a, r) => a + (r.power < 0 ? r.power : 0), 0);
+    const grid = sup[POWER] || 0;
+    const energy = {on: !!res.energy, cons: consMW, gen: genMW, grid, press, pressMW, balance: genMW + grid - consMW, missingWells: press.filter(p => !p.wells).map(p => p.item)};
+    return {rows, balance, raw: Object.values(raw), score, d: res.d, error: res.error, scale: res.scale, energy};
   }
 
   // profundidad (consumidores arriba) sobre el grafo del plan
@@ -288,7 +343,7 @@ const Engine = (() => {
       if (i in memo) return memo[i];
       if (st.has(i)) return 0;
       st.add(i); let m = 0;
-      for (const p of by[i] || []) for (const j in p.in) m = Math.max(m, 1 + dep(j));
+      for (const p of by[i] || []) for (const j in p.in) if (j !== POWER) m = Math.max(m, 1 + dep(j));
       st.delete(i); return memo[i] = m;
     };
     const o = {}; for (const i in by) o[i] = dep(i); return o;
@@ -300,6 +355,6 @@ const Engine = (() => {
     const a = analyze(cfg, solve(cfg, p2, [{item, rate: 1}]));
     return {score: a.score, error: a.error};
   }
-  return {init, options, defaultSel, selOf, proc, solveManual, solveOpt, solve, analyze, depths, simplex, costPerUnit, rawWeight, shards, extCfg, recCfg, allowed, get R() { return R; }, get PRIM() { return PRIM; }, get OPTS() { return OPTS; }};
+  return {POWER, init, options, defaultSel, selOf, proc, solveManual, solveOpt, solve, analyze, depths, simplex, costPerUnit, rawWeight, shards, extCfg, recCfg, allowed, pressPower, isGen, get R() { return R; }, get PRIM() { return PRIM; }, get OPTS() { return OPTS; }};
 })();
 if (typeof module !== "undefined") module.exports = Engine;

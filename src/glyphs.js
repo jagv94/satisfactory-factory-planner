@@ -25,6 +25,7 @@ const Glyphs = (() => {
     ammo: `<path d="M9 21V10c0-4 1.5-6.5 3-7.5 1.5 1 3 3.5 3 7.5v11Z" fill="currentColor" ${S}/><path d="M9 17h6v4H9Z" ${D}/><path d="M10.5 9.5c0-2.5.6-4 1.5-5" fill="none" stroke="#fff" stroke-opacity=".5" stroke-width="1.4"/>`,
     bio: `<path d="M4 20C4 10 10 4 20 4c0 10-6 16-16 16Z" fill="currentColor" ${S}/><path d="M5 19 16 8" stroke="#000" stroke-opacity=".35" stroke-width="1.3"/><path d="M8 13c1-3 3.5-5.5 7-6.5" fill="none" stroke="#fff" stroke-opacity=".45" stroke-width="1.4"/>`,
     shard: `<path d="M12 2 18 12 12 22 6 12Z" fill="currentColor" ${S}/><path d="M12 2 18 12H6Z" ${L}/><circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-opacity=".35" stroke-width="1"/>`,
+    bolt: `<path d="M13.5 2 5 13.5h6L9.5 22 19 9.5h-6.2Z" fill="currentColor" ${S}/><path d="M13.5 2 5 13.5h3.2L12.8 4.6Z" ${L}/>`,
     box: `<path d="M12 2.8 20.5 7.5v9L12 21.2 3.5 16.5v-9Z" fill="currentColor" ${S}/><path d="M3.5 7.5 12 12.2l8.5-4.7L12 2.8Z" ${L}/><path d="M12 12.2v9l8.5-4.7v-9Z" ${D}/>`,
   };
   const RULES = [
@@ -42,6 +43,7 @@ const Glyphs = (() => {
     [/Crystal|Quartz Crystal|Diamond/, "crystal"],
   ];
   function shape(it) {
+    if (it.form === "power") return "bolt";
     if (it.form === "liquid") return "drop";
     if (it.form === "gas") return "gas";
     if (it.raw) return "ore";
