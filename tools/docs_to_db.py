@@ -2,7 +2,8 @@
 
 Uso:  python docs_to_db.py "<Satisfactory>/CommunityResources/Docs" ../data/satisfactory_db.json
 Lee en-US.json y es-ES.json (UTF-16). Solo incluye recetas de máquinas de producción
-(sin edificios, equipo ni FICSMAS) y añade el consumo de combustible nuclear como receta.
+(sin edificios, equipo ni FICSMAS) y añade cada generador con cada combustible como receta
+(combustible + agua -> Power_MW + residuo).
 """
 import json, re, sys, os
 
@@ -59,9 +60,11 @@ for k in ("FGBuildableManufacturer", "FGBuildableManufacturerVariablePower"):
             "slots": int(f(c.get("mProductionShardSlotSize"))), "boost": f(c.get("mProductionShardBoostMultiplier")),
             "boostExp": f(c.get("mProductionBoostPowerConsumptionExponent"), 2), "variable": k.endswith("VariablePower"),
         }
-gen = EN["FGBuildableGeneratorNuclear"][0]
-buildings[gen["ClassName"]] = {"en": "Nuclear Power Plant", "es": es_name.get(gen["ClassName"], "Central nuclear"),
-    "power": -f(gen["mPowerProduction"]), "exp": 1, "slots": 0, "boost": 0, "boostExp": 2, "variable": False, "generator": True}
+# generadores con combustible (Biomass Burner, carbón, combustible, nuclear): potencia negativa = producción
+GENS = [c for k in ("FGBuildableGeneratorFuel", "FGBuildableGeneratorNuclear") for c in EN[k]]
+for g in GENS:
+    buildings[g["ClassName"]] = {"en": g["mDisplayName"], "es": es_name.get(g["ClassName"], g["mDisplayName"]),
+        "power": -f(g["mPowerProduction"]), "exp": 1, "slots": 0, "boost": 0, "boostExp": 2, "variable": False, "generator": True}
 
 # ---------- desbloqueos (esquemas)
 unlock = {}
@@ -103,16 +106,29 @@ for c in EN["FGRecipe"]:
         r["powerRange"] = [lo, hi]; r["power"] = (lo + hi) / 2
     recipes.append(r)
 
-# combustible nuclear -> residuos
-for fu in gen["mFuel"]:
-    fuel, waste = fu["mFuelClass"], fu.get("mByproduct")
-    if not waste: continue
-    e = items[fuel]["energy"]; pw = f(gen["mPowerProduction"])
-    rods = pw * 60 / e
-    water = pw * f(gen["mSupplementalToPowerRatio"]) * 60 / 1000
-    recipes.append({"id": "Gen_" + fuel, "en": items[waste]["en"] + " (Nuclear Power Plant)", "es": items[waste]["es"] + " (central nuclear)",
-        "alt": False, "building": gen["ClassName"], "time": e / pw, "in": {fuel: round(rods, 6), fu["mSupplementalResourceClass"]: round(water, 6)},
-        "out": {waste: round(rods * f(fu["mByproductAmount"]), 6)}, "unlock": {"type": "Milestone", "tier": 8, "en": "Nuclear Power", "es": "Energía nuclear"}})
+# generadores: una receta por combustible. Power_MW es un objeto sintético (MW) que el motor reparte entre las máquinas
+POWER = "Power_MW"
+items[POWER] = {"en": "Power", "es": "Energía", "form": "power", "raw": False, "sink": 0, "color": "#f2c230",
+                "icon": None, "iconPath": None, "energy": 0, "synthetic": True}
+bld_recipe = {}  # Desc_<edificio>_C -> receta del edificio (para saber qué hito lo desbloquea)
+for c in EN["FGRecipe"]:
+    for it, _ in parse_amounts(c.get("mProduct")): bld_recipe.setdefault(it, c["ClassName"])
+for g in GENS:
+    pw = f(g["mPowerProduction"]); gu = unlock.get(bld_recipe.get("Desc_" + g["ClassName"][6:], ""), {})
+    for fu in g["mFuel"]:
+        fuel, waste, sup = fu["mFuelClass"], fu.get("mByproduct"), fu.get("mSupplementalResourceClass")
+        if fuel not in items: continue
+        e = items[fuel]["energy"] * (1000 if items[fuel]["form"] != "solid" else 1)  # Docs: MJ por unidad o por litro
+        if e <= 0: continue
+        rate = pw * 60 / e
+        ins = {fuel: round(rate, 6)}
+        if sup and g.get("mRequiresSupplementalResource") == "True": ins[sup] = round(pw * f(g["mSupplementalToPowerRatio"]) * 60 / 1000, 6)
+        outs = {POWER: pw}
+        if waste: outs[waste] = round(rate * f(fu["mByproductAmount"]), 6)
+        bname = buildings[g["ClassName"]]
+        recipes.append({"id": "Gen_" + fuel, "en": f'{items[fuel]["en"]} ({bname["en"]})', "es": f'{items[fuel]["es"]} ({bname["es"]})',
+            "alt": False, "building": g["ClassName"], "time": e / pw, "in": ins, "out": outs,
+            "unlock": {"type": gu.get("type", "Milestone"), "tier": gu.get("tier", 0), "en": gu.get("en", ""), "es": gu.get("es", "")}})
 
 used = set()
 for r in recipes: used |= set(r["in"]) | set(r["out"])
@@ -129,7 +145,8 @@ extractors = {
   "oil": {"rate": rate(ex["Build_OilPump_C"], True), "power": f(ex["Build_OilPump_C"]["mPowerConsumption"]), "items": ["Desc_LiquidOil_C"], "purity": True,
           "en": "Oil Extractor", "es": es_name.get("Build_OilPump_C")},
   "well": {"rate": rate(ex["Build_FrackingExtractor_C"], True), "power": 0, "items": ["Desc_LiquidOil_C", "Desc_NitrogenGas_C", "Desc_Water_C"], "purity": True,
-           "en": "Resource Well Extractor", "es": es_name.get("Build_FrackingExtractor_C"), "pressurizer": f(press["mPowerConsumption"])},
+           "en": "Resource Well Extractor", "es": es_name.get("Build_FrackingExtractor_C"), "pressurizer": f(press["mPowerConsumption"]),
+           "pressurizerExp": f(press.get("mPowerConsumptionExponent"), 1.321929), "pressurizerName": {"en": press["mDisplayName"], "es": es_name.get(press["ClassName"], press["mDisplayName"])}},
 }
 purity = {"Impure": 0.5, "Normal": 1.0, "Pure": 2.0}
 belts = {f"Mk.{n}": f([c for c in EN["FGBuildableConveyorBelt"] if c["ClassName"] == f"Build_ConveyorBeltMk{n}_C"][0]["mSpeed"]) / 2 for n in range(1, 7)}
@@ -141,7 +158,7 @@ world = {"Desc_OreIron_C": 92100, "Desc_OreGold_C": 15000, "Desc_OreCopper_C": 3
          "Desc_LiquidOil_C": 12600, "Desc_NitrogenGas_C": 12000}
 # objetos recolectados a mano (sin receta ni extractor)
 prim = {list(r["out"])[0] for r in recipes}
-manual = sorted(k for k in used if not items[k]["raw"] and k not in prim and not any(k in r["out"] for r in recipes))
+manual = sorted(k for k in used if not items[k]["raw"] and k not in prim and not any(k in r["out"] for r in recipes) and not items[k].get("synthetic"))
 items = {k: v for k, v in items.items() if k in used or v["raw"]}
 for k in manual: items[k]["manual"] = True
 
@@ -153,7 +170,7 @@ RAWCOL = {"Desc_OreIron_C": "#b9573f", "Desc_OreCopper_C": "#d9783a", "Desc_Ston
 for k, v in RAWCOL.items():
     if k in items: items[k]["color"] = v
 
-db = {"meta": {"game": "Satisfactory", "source": "CommunityResources/Docs (en-US, es-ES)", "generated": "2026-11-25",
+db = {"meta": {"game": "Satisfactory", "source": "CommunityResources/Docs (en-US, es-ES)", "generated": __import__("datetime").date.today().isoformat(),
                "docsMtime": os.path.getmtime(os.path.join(DOCS, "en-US.json")), "units": "por minuto; fluidos en m³/min"},
       "items": items, "recipes": recipes, "buildings": buildings, "extractors": extractors, "purity": purity,
       "belts": belts, "pipes": pipes, "world": world,
