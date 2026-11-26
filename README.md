@@ -29,7 +29,11 @@ Herramienta para calcular fábricas de Satisfactory: qué recetas usar, cuántas
    - Con *Maximizar* calcula cuánto puedes producir dentro de los límites que pongas en *Extracción* (o el máximo del mapa).
 4. **Alternativas**: marca las que tienes desbloqueadas. Las bloqueadas no aparecen en los desplegables ni las usa el optimizador.
 5. **Producción**: cada fila tiene su reloj (%) y sus Somersloops. La tabla calcula los Power Shards necesarios, el reloj uniforme ("real") y la potencia.
-6. **Diagrama**: flujo de materias primas a objetivos. **Árbol**: desglose recursivo. **Excedentes**: lo que sobra.
+6. **Energía**: en *Cálculo → Energía* eliges entre *Solo informar del consumo* y *Generarla en la fábrica*. Con la segunda, la fábrica produce su propia energía: en manual eliges el generador y su combustible en la fila *Energía* de Producción; al optimizar, el motor los elige según el criterio. Puedes indicar *energía externa disponible* (MW de otra red) para que solo genere el resto. La pestaña *Energía* muestra generadores, combustible, agua, residuos y el consumo por máquina. También puedes poner *Energía* como objetivo para diseñar una central.
+   - Generadores: Biomass Burner, carbón, combustible y central nuclear (uranio, plutonio y ficsonio), con overclock.
+   - *Mínima potencia* minimiza el consumo total de la fábrica (incluidas las cadenas de combustible), sin contar lo que producen los generadores.
+   - Los residuos nucleares se permiten como excedente, con aviso: no se pueden destruir en el AWESOME Sink. Para evitarlos, excluye las recetas nucleares en el optimizador.
+7. **Diagrama**: flujo de materias primas a objetivos. **Árbol**: desglose recursivo. **Excedentes**: lo que sobra.
 
 Atajo: `Ctrl+Z` deshace (fuera de los campos de texto).
 
@@ -58,8 +62,9 @@ El contexto técnico (arquitectura, decisiones, reglas y pendientes) está en `C
 ## Límites conocidos
 
 - **Potencia de máquinas variables:** para el Particle Accelerator, el Converter y el Quantum Encoder se usa la media del rango de cada receta.
-- **Resource Well:** el Pressurizer (150 MW por pozo) no se suma; se avisa en la pestaña *Máquinas*.
-- **Generación de energía:** no se planifica, salvo los residuos de la central nuclear.
+- **Resource Well:** indica en *Extracción → Pozos (Pressurizers)* cuántos pozos usas por fluido. Si lo dejas vacío, sus Pressurizers (150 MW cada uno) no se suman y se avisa.
+- **Generación de energía:** no incluye la geotérmica ni el Alien Power Augmenter.
+- **Consumo real:** se calcula con máquinas enteras y reloj uniforme, igual o menor que el planificado; puede sobrar algo de generación.
 - **Máximo del mapa:** corresponde al mapa por defecto (wiki, nodos de la 1.x). Si usas nodos aleatorios de la 1.2, cambia los límites a mano.
 - **Desglose del árbol:** es bruto, no descuenta subproductos; los totales netos están en *Producción*.
 
