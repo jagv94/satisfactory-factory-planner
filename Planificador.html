@@ -765,7 +765,11 @@ const fresh = () => ({v: 2, lang: "es", icons: "auto", group: "level", tab: "pro
 let S = fresh(), hist = [];
 function loadDB(db) { DB = db; Engine.init(DB); COL = Glyphs.colors(DB, Engine); }
 loadDB(EMBED);
-try { const s = JSON.parse(localStorage.getItem(KEY) || "null"); if (s && s.v === 2 && s.plans && s.plans.length) S = Object.assign(fresh(), s, {cfg: Object.assign(fresh().cfg, s.cfg)}); } catch (e) {}
+// estado guardado o importado: los campos de plan que empiezan por «_» son internos del motor o de las pruebas
+// (p. ej. _pressMax) y se descartan, así que no se pueden fijar desde una configuración
+const restore = s => Object.assign(fresh(), s, {cfg: Object.assign(fresh().cfg, s.cfg),
+  plans: s.plans.map(p => Object.fromEntries(Object.entries(p || {}).filter(([k]) => !k.startsWith("_"))))});
+try { const s = JSON.parse(localStorage.getItem(KEY) || "null"); if (s && s.v === 2 && Array.isArray(s.plans) && s.plans.length) S = restore(s); } catch (e) {}
 const save = () => { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) {} };
 const P = () => S.plans[Math.min(S.cur, S.plans.length - 1)];
 let pend = 0;
@@ -1115,7 +1119,7 @@ document.addEventListener("click", e => {
   }
 });
 function importState(txt) {
-  try { const s = JSON.parse(txt); if (s.v !== 2 || !Array.isArray(s.plans)) throw 0; set(() => { S = Object.assign(fresh(), s, {cfg: Object.assign(fresh().cfg, s.cfg)}); }); $("dbinfo").textContent = "Configuración importada."; }
+  try { const s = JSON.parse(txt); if (s.v !== 2 || !Array.isArray(s.plans)) throw 0; set(() => { S = restore(s); }); $("dbinfo").textContent = "Configuración importada."; }
   catch (e) { $("dbinfo").textContent = "Esa configuración no es válida (JSON de la versión 2)."; }
 }
 function undo() { if (!hist.length) return; S = JSON.parse(hist.pop()); save(); render(); }

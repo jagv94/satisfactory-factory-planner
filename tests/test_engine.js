@@ -158,17 +158,29 @@ ok(!rP.error && rP.pressIter <= 12 && cohP && closes(AP), `Pressurizers: nítric
   const stub = base => { const t = function () {}; Object.assign(t, base || {}); return new Proxy(t, {
     get(o, k) { if (k in o && k !== "name" && k !== "length") return o[k]; if (k === Symbol.toPrimitive) return () => ""; if (k === Symbol.iterator) return function* () {}; if (k === "length") return 0; if (k === "then" || typeof k === "symbol") return undefined; return (o[k] = stub()); },
     set(o, k, v) { o[k] = v; return true; }, apply: () => stub()}); };
-  const els = {}, el = id => els[id] || (els[id] = stub({id, textContent: "", innerHTML: "", value: "", dataset: {}, hidden: false}));
-  const ctx = vm.createContext({console, Intl, setTimeout: () => 0, clearTimeout() {}, requestAnimationFrame: () => 0, CSS: {escape: s => s}, Image: function () {},
-    localStorage: {getItem: () => null, setItem() {}}, location: {protocol: "https:"}, matchMedia: () => ({matches: false, addEventListener() {}}), getComputedStyle: () => stub(),
-    window: stub({scrollY: 0, scrollTo() {}, addEventListener() {}}),
-    document: stub({getElementById: id => id === "db" ? {textContent: dbM ? dbM[1] : "{}"} : el(id), querySelector: () => null, querySelectorAll: () => [], addEventListener() {}, activeElement: null, body: stub(), documentElement: stub()})});
-  let bootErr = null;
-  try { vm.runInContext(js, ctx, {filename: "Planificador.html"}); } catch (e) { bootErr = e; }
+  // saved: configuración guardada en localStorage (null = primera visita)
+  const boot = saved => {
+    const els = {}, el = id => els[id] || (els[id] = stub({id, textContent: "", innerHTML: "", value: "", dataset: {}, hidden: false}));
+    const ctx = vm.createContext({console, Intl, setTimeout: () => 0, clearTimeout() {}, requestAnimationFrame: () => 0, CSS: {escape: s => s}, Image: function () {},
+      localStorage: {getItem: () => saved, setItem() {}}, location: {protocol: "https:"}, matchMedia: () => ({matches: false, addEventListener() {}}), getComputedStyle: () => stub(),
+      window: stub({scrollY: 0, scrollTo() {}, addEventListener() {}}),
+      document: stub({getElementById: id => id === "db" ? {textContent: dbM ? dbM[1] : "{}"} : el(id), querySelector: () => null, querySelectorAll: () => [], addEventListener() {}, activeElement: null, body: stub(), documentElement: stub()})});
+    let err = null;
+    try { vm.runInContext(js, ctx, {filename: "Planificador.html"}); } catch (e) { err = e; }
+    return {els, ctx, err};
+  };
+  const {els, ctx, err: bootErr} = boot(null);
   const sub = els.sub ? String(els.sub.textContent) : "";
   ok(!bootErr && ["Engine", "Glyphs", "Sankey"].every(g => vm.runInContext(`typeof ${g}`, ctx) === "object") && sub.includes(`${Object.keys(db.items).length} objetos, ${db.recipes.length} recetas`)
     && String(els.kpis && els.kpis.innerHTML).includes("Consumo") && String(els.prod && els.prod.innerHTML).length > 1000,
     "la app arranca: define Engine, Glyphs y Sankey, rellena el subtítulo, las cifras y la tabla de producción" + (bootErr ? ` — ${bootErr.name}: ${bootErr.message} (${(bootErr.stack.match(/Planificador\.html:\d+/) || ["?"])[0]})` : ""));
+  // 23) los campos internos de plan («_», p. ej. _pressMax) no se pueden fijar desde una configuración guardada o importada
+  // (las dos rutas usan restore()). Con _pressMax: 0 aplicado, este plan daría el error «press».
+  const savedP = JSON.stringify({v: 2, cur: 0, cfg: {clock: 1, ext: {Desc_NitrogenGas_C: {wells: 2}}},
+    plans: [{name: "p", targets: [{item: "Desc_NitricAcid_C", rate: 30}], sel: {}, rc: {}, mode: "opt", objective: "weighted", ban: {}, energy: "gen", gridMW: 0, _pressMax: 0}]});
+  const b2 = boot(savedP), w2 = String(b2.els.warns && b2.els.warns.innerHTML);
+  ok(!b2.err && !w2.includes("Pressurizers") && String(b2.els.kpis && b2.els.kpis.innerHTML).includes("Balance de energía") && String(b2.els.prod && b2.els.prod.innerHTML).length > 1000,
+    "configuración guardada con _pressMax: se descarta y el plan se calcula" + (b2.err ? ` — ${b2.err.name}: ${b2.err.message}` : ""));
 }
 console.log(fails ? `\n${fails} fallo(s)` : "\nTodo correcto");
 process.exitCode = fails ? 1 : 0;
