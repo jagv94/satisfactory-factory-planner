@@ -19,11 +19,18 @@ cases.push([f5, "weighted", gen], [f5, "power", gen], [f5, "machines", gen], [f5
   [[{item: E.POWER, rate: 5000}], "weighted"], [[{item: E.POWER, rate: 5000}], "machines"], [[{item: E.POWER, rate: 2000}], "weighted", {allowManual: true}],
   ...targ.filter((_, k) => k % 9 === 0).map(i => [[{item: i, rate: 2}], "weighted", gen]),
   ...targ.filter((_, k) => k % 11 === 0).map(i => [[{item: i, rate: 2}], "power", gen]));
+// filtro de progreso (cfg.progress): cada fase del Space Elevator en su tier, con y sin el MAM, y con energía generada
+const trees = db.progress.trees, mamOf = ks => Object.fromEntries(ks.flatMap(k => trees[k].nodes).map(n => [n, true]));
+const cfgP = (tier, mam) => Object.assign({}, cfg, {progress: {tier, add: {}, rm: {}, mam}});
+const ph = n => ({2: [1, 2, 3], 3: [2, 4, 5], 4: [6, 7, 8, 9]})[n].map(i => ({item: `Desc_SpaceElevatorPart_${i}_C`, rate: 1}));
+cases.push([ph(2), "weighted", null, cfgP(4, {})], [ph(3), "weighted", null, cfgP(6, {})], [ph(3), "power", gen, cfgP(6, mamOf(["Sulfur_RS"]))],
+  [ph(4), "weighted", null, cfgP(8, mamOf(["Caterium_RS", "Quartz_RS"]))], [ph(4), "machines", gen, cfgP(8, mamOf(["Caterium_RS", "Quartz_RS", "Sulfur_RS"]))],
+  [f5, "weighted", null, cfgP(9, mamOf(Object.keys(trees)))], [f5, "power", gen, cfgP(9, {})]);
 for (const [t, o, extra, c] of cases) {
   // con Pressurizers, el optimizador resuelve varias veces (punto fijo): se exporta cada problema
   globalThis.LPS = [];
   E.solveOpt(c || cfg, Object.assign({targets: t, sel: {}, rc: {}, mode: "opt", objective: o}, extra || {}));
-  const name = t.map(x => db.items[x.item].en).join("+") + "/" + o + (extra ? " " + JSON.stringify(extra) : "") + (c ? " +pozos" : "");
+  const name = t.map(x => db.items[x.item].en).join("+") + "/" + o + (extra ? " " + JSON.stringify(extra) : "") + (c ? (c.progress ? ` +progreso tier ${c.progress.tier}` : " +pozos") : "");
   globalThis.LPS.forEach((lp, k) => out.push({name: name + (globalThis.LPS.length > 1 ? ` #${k + 1}` : ""), ...lp}));
 }
 fs.writeFileSync(path.join(__dirname, "lp_cases.json"), JSON.stringify(out));

@@ -25,12 +25,111 @@ const Engine = (() => {
   }
   const rank = id => { const r = R[id], it = DB.items[Object.keys(r.out)[0]];
     return (r.alt ? 4 : 0) + (DB.buildings[r.building].en === "Packager" ? 8 : 0) + (r.unlock.type === "Custom" ? 2 : 0) + (it && r.en === it.en ? 0 : 1); };
-  const allowed = (cfg, id) => !R[id].alt || !(cfg.locked || {})[id];
+
+  // ---------- progreso de la partida (cfg.progress): qué hitos, mejoras del HUB y nodos del MAM se han completado.
+  // cfg.progress = {tier: 0..9 | null, add: {hito: true}, rm: {hito: true}, mam: {nodo: true}}. Sin progress, o con tier null,
+  // no hay filtro: todo desbloqueado (como antes). Hitos y mejoras del HUB: los de tier <= tier, menos rm, más add.
+  // Datos en DB.progress (docs_to_db.py): rec[receta] = {ways: [esquemas que la dan], drive: [alternativas de disco duro],
+  // with: receta de la alternativa que la incluye}; bld[edificio] = [esquemas]; alt[esquema] = {deps: [todos necesarios]}.
+  const OFF = {on: false};
+  let progMemo = {key: null, val: OFF};
+  function progress(cfg) {
+    const pg = cfg && cfg.progress, PR = DB.progress;
+    if (!pg || pg.tier === null || pg.tier === undefined || !PR) return OFF;
+    const key = JSON.stringify(pg);
+    if (progMemo.key === key) return progMemo.val;
+    const add = pg.add || {}, rm = pg.rm || {}, mam = pg.mam || {}, done = new Set();
+    for (const [sid, e] of Object.entries(PR.sch)) {
+      if (e.t === "start") done.add(sid);
+      else if (e.t === "hub" || e.t === "ms") { if (e.tier <= pg.tier ? !rm[sid] : !!add[sid]) done.add(sid); }
+      else if (e.t === "mam" && mam[sid]) done.add(sid);
+    }
+    const has = sid => done.has(sid), bld = {}, altOK = {}, rec = {};
+    for (const [b, w] of Object.entries(PR.bld)) bld[b] = w.some(has);
+    for (const [a, x] of Object.entries(PR.alt)) altOK[a] = x.deps.every(has);
+    for (const r of DB.recipes) {
+      const w = PR.rec[r.id] || {}, none = !w.ways && !w.drive && !w.with;   // generadores: solo cuenta el edificio
+      rec[r.id] = {b: bld[r.building] !== false, prog: none || (w.ways || []).some(has), drive: (w.drive || []).some(a => altOK[a]), with: w.with || null};
+    }
+    const ext = {};
+    for (const [k, e] of Object.entries(DB.extractors)) ext[k] = k === "miner" ? Object.values(e.tiers).some(t => bld[t.id]) : !!bld[e.id];
+    const best = (o, idOf) => { let m = null; for (const [k, v] of Object.entries(o)) if (bld[idOf(k, v)]) m = k; return m; };
+    const val = {on: true, tier: pg.tier, done, bld, altOK, rec, ext,
+      miner: best(DB.extractors.miner.tiers, (k, t) => t.id), belt: best(DB.belts, k => `Build_ConveyorBeltMk${k.slice(3)}_C`),
+      pipe: best(DB.pipes, k => k === "Mk.1" ? "Build_Pipeline_C" : "Build_PipelineMK2_C"),
+      overclock: has(PR.feat.overclock), sloop: has(PR.feat.sloop)};
+    progMemo = {key, val};
+    return val;
+  }
+  // receta utilizable: con filtro, su edificio y (un hito o nodo que la dé | la alternativa que la incluye | conseguible por
+  // disco duro y desbloqueada en la lista). Las alternativas que da el MAM no dependen de la lista. Sin filtro, como antes:
+  // las alternativas, si están desbloqueadas; la Sílice destilada, solo con «Quartz Purification» (with).
+  function allowed(cfg, id) {
+    const r = R[id], P = progress(cfg), locked = !!(cfg.locked || {})[id];
+    if (!P.on) { const w = DB.progress && DB.progress.rec[id]; return w && w.with ? allowed(cfg, w.with) : !r.alt || !locked; }
+    const a = P.rec[id];
+    if (!a.b) return false;
+    if (a.prog) return true;
+    if (a.with) return allowed(cfg, a.with);
+    return r.alt && a.drive && !locked;
+  }
+  // estado de una alternativa para la lista y el asesor: "ok" (se puede conseguir o, sin filtro, cualquiera), "mam" (la da
+  // un nodo del MAM marcado: no depende de la lista) o "no" (aún no se puede conseguir: req = lo más barato que falta)
+  function altState(cfg, id) {
+    const P = progress(cfg);
+    if (!P.on) return {state: "ok"};
+    const a = P.rec[id];
+    if (a.b && a.prog) return {state: "mam", via: (DB.progress.rec[id].ways || []).filter(s => P.done.has(s))};
+    if (a.b && a.drive) return {state: "ok"};
+    return {state: "no", req: recipeReq(cfg, id)};
+  }
+  // coste de completar un esquema, para elegir el camino más barato: hitos por su tier; nodos del MAM como un tier 3
+  const schCost = sid => { const e = DB.progress.sch[sid]; return e.t === "mam" ? 3 : e.tier; };
+  const setCost = s => [Math.max(-1, ...s.map(schCost)), s.length];
+  const cheaper = (a, b) => !b || (x => x[0] < 0 || x[0] === 0 && x[1] < 0)([setCost(a)[0] - setCost(b)[0], setCost(a)[1] - setCost(b)[1]]);
+  // lo que falta para poder usar una receta: {sids: [esquemas por marcar], drive: true si además hay que conseguirla en un disco duro}
+  function recipeReq(cfg, id) {
+    const P = progress(cfg), PR = DB.progress;
+    if (!P.on) return {sids: [], drive: false};
+    const w = PR.rec[id] || {}, miss = s => s.filter(x => !P.done.has(x));
+    let bset = null; for (const s of PR.bld[R[id].building] || []) { const m = miss([s]); if (cheaper(m, bset)) bset = m; }
+    bset = bset || [];
+    let best = null, drive = false;
+    for (const s of w.ways || []) { const m = [...new Set([...miss([s]), ...bset])]; if (cheaper(m, best)) { best = m; drive = false; } }
+    for (const a of w.drive || []) { const m = [...new Set([...miss(PR.alt[a].deps), ...bset])]; if (cheaper(m, best)) { best = m; drive = true; } }
+    if (w.with && !best) { const q = recipeReq(cfg, w.with); return {sids: [...new Set([...q.sids, ...bset])], drive: q.drive, with: w.with}; }
+    return {sids: best || bset, drive};
+  }
+  // lo que falta para fabricar (o extraer) un objeto: el camino más barato entre sus recetas y extractores
+  function itemReq(cfg, item) {
+    const P = progress(cfg), PR = DB.progress;
+    if (!P.on) return {sids: [], drive: false};
+    let best = null;
+    for (const o of OPTS[item] || []) {
+      const e = DB.extractors[o.slice(2)], ids = o === "x:miner" ? Object.values(e.tiers).map(t => t.id) : [e.id];
+      for (const b of ids) for (const s of PR.bld[b] || []) { const m = P.done.has(s) ? [] : [s]; if (cheaper(m, best && best.sids)) best = {sids: m, drive: false}; }
+    }
+    for (const id of PROD[item] || []) { const q = recipeReq(cfg, id); if (cheaper(q.sids, best && best.sids)) best = q; }
+    return best || {sids: [], drive: false};
+  }
+  const extOK = (cfg, k) => { const P = progress(cfg); return !P.on || P.ext[k]; };
+  // lo que falta para un extractor (Miner: el Mk.1) o un edificio
+  function bldReq(cfg, b) {
+    const P = progress(cfg); if (!P.on) return {sids: [], drive: false};
+    let best = null; for (const s of DB.progress.bld[b] || []) { const m = P.done.has(s) ? [] : [s]; if (cheaper(m, best)) best = m; }
+    return {sids: best || [], drive: false};
+  }
+  const extReq = (cfg, k) => bldReq(cfg, k === "miner" ? DB.extractors.miner.tiers["Mk.1"].id : DB.extractors[k].id);
+  // reloj del Miner, cinta y tubería efectivos: con filtro, como mucho el mayor desbloqueado (se conserva la elección guardada)
+  const cap = (want, max, keys) => max && keys.indexOf(want) > keys.indexOf(max) ? max : want;
+  const minerTier = (cfg, want) => { const P = progress(cfg); return P.on ? cap(want, P.miner, Object.keys(DB.extractors.miner.tiers)) : want; };
+  const belt = cfg => { const P = progress(cfg); return P.on ? cap(cfg.belt, P.belt, Object.keys(DB.belts)) : cfg.belt; };
+  const pipe = cfg => { const P = progress(cfg); return P.on ? cap(cfg.pipe, P.pipe, Object.keys(DB.pipes)) : cfg.pipe; };
 
   // opciones de producción de un objeto
   function options(cfg, item, keep) {
     const it = DB.items[item] || {};
-    const o = [...(OPTS[item] || [])];
+    const o = (OPTS[item] || []).filter(x => extOK(cfg, x.slice(2)));
     if (it.manual) o.push("manual");
     for (const id of PRIM[item] || []) if (allowed(cfg, id) || id === keep) o.push(id);
     o.push("import");
@@ -38,9 +137,10 @@ const Engine = (() => {
   }
   function defaultSel(cfg, item) {
     const it = DB.items[item] || {};
-    if (OPTS[item]) return item === "Desc_NitrogenGas_C" ? "x:well" : OPTS[item].find(x => x !== "x:well") || OPTS[item][0];
+    const ox = (OPTS[item] || []).filter(x => extOK(cfg, x.slice(2)));   // con filtro, solo los extractores desbloqueados
+    if (ox.length) return item === "Desc_NitrogenGas_C" && ox.includes("x:well") ? "x:well" : ox.find(x => x !== "x:well") || ox[0];
     if (it.manual) return "manual";
-    if (DEF[item] && R[DEF[item]]) return DEF[item];
+    if (DEF[item] && R[DEF[item]] && allowed(cfg, DEF[item])) return DEF[item];
     const p = (PRIM[item] || []).filter(id => allowed(cfg, id));
     return p[0] || "import";
   }
@@ -66,10 +166,11 @@ const Engine = (() => {
     if (sel.startsWith("x:")) {
       const k = sel.slice(2), e = DB.extractors[k], c = extCfg(cfg, item);
       let rate = e.rate, power = e.power, name = e;
-      if (k === "miner") { const t = e.tiers[c.tier] || e.tiers["Mk.3"]; rate = t.rate; power = t.power; name = {en: "Miner " + c.tier, es: e.es + " " + c.tier}; }
+      let tk = c.tier;
+      if (k === "miner") { tk = minerTier(cfg, e.tiers[c.tier] ? c.tier : "Mk.3"); const t = e.tiers[tk]; rate = t.rate; power = t.power; name = {en: "Miner " + tk, es: e.es + " " + tk}; }
       const pm = e.purity === false ? 1 : DB.purity[c.purity] ?? 1;
       return {id: sel + ":" + item, kind: "extract", item, ext: k, in: {}, out: {[item]: rate * pm * c.clock}, base: power, power: power * Math.pow(c.clock, EXP),
-        clock: c.clock, sloops: 0, building: "x:" + k + (k === "miner" ? ":" + c.tier : ""), bname: name};
+        clock: c.clock, sloops: 0, building: "x:" + k + (k === "miner" ? ":" + tk : ""), bname: name};
     }
     const r = R[sel], b = DB.buildings[r.building], rc = recCfg(cfg, plan, sel);
     const s = Math.min(rc.sloops, b.slots), boost = 1 + s * b.boost, c = rc.clock;
@@ -227,17 +328,35 @@ const Engine = (() => {
       const i = q.shift(); if (seenI.has(i)) continue; seenI.add(i);
       const it = DB.items[i] || {}, sel = selOf(cfg, plan, i);
       if ((plan.sel || {})[i] === "import") add(proc(cfg, plan, "import", i));
-      if (it.raw) { if (sel.startsWith("x:")) add(proc(cfg, plan, sel, i)); else if (sel !== "import" && OPTS[i]) add(proc(cfg, plan, defaultSel(cfg, i), i)); }
+      if (it.raw) { if (sel.startsWith("x:")) add(proc(cfg, plan, sel, i)); else if (sel !== "import" && OPTS[i]) { const ds = defaultSel(cfg, i); if (ds.startsWith("x:")) add(proc(cfg, plan, ds, i)); } }
       if (it.manual && (plan.allowManual || (plan.sel || {})[i] === "manual")) add(proc(cfg, plan, "manual", i));
       for (const id of PROD[i] || []) if (allowed(cfg, id) && !(plan.ban || {})[id]) add(proc(cfg, plan, id, i));
     }
     return {procs, reach: seenI};
   }
   const reach = (cfg, plan, targets) => collect(cfg, plan, demand(targets ?? plan.targets)).reach;
+  // con filtro de progreso: objetos que se pueden obtener con los procesos del LP (desde extractores, importaciones, recolección
+  // y energía externa). Si un objetivo no sale, el plan no es posible: se dice qué falta en vez de un «sin solución» genérico.
+  // La energía no cuenta como entrada (con «generar», máquinas y generadores se alimentan entre sí: el LP lo resuelve).
+  function noprog(cfg, procs, d, sup) {
+    const have = new Set([...Object.keys(sup), POWER]), by = {};
+    for (const p of procs) for (const o in p.out) (by[o] = by[o] || []).push(p);
+    for (let ch = true; ch;) { ch = false; for (const p of procs) if (Object.keys(p.in).every(k => have.has(k))) for (const o in p.out) if (!have.has(o)) { have.add(o); ch = true; } }
+    const targets = Object.keys(d).filter(i => !have.has(i));
+    if (!targets.length) return null;
+    // bloqueos: objetos que nada de lo disponible produce, bajando por las entradas que faltan
+    const block = [], seen = new Set();
+    const walk = i => { if (seen.has(i)) return; seen.add(i);
+      if (!(by[i] || []).length) { block.push(i); return; }
+      for (const p of by[i]) for (const k in p.in) if (!have.has(k)) walk(k); };
+    targets.forEach(walk);
+    return {targets, blockers: block.map(item => Object.assign({item}, itemReq(cfg, item)))};
+  }
   function solveOpt0(cfg, plan, targets, mode) {
     const d = demand(targets ?? plan.targets), sup = supply(plan);
     const objective = mode || plan.objective || "weighted";
     const {procs, reach: seenI} = collect(cfg, plan, d);
+    if (progress(cfg).on) { const np = noprog(cfg, procs, d, sup); if (np) return {steps: [], d, error: "noprog", noprog: np, procs, supply: sup, energy: energyOn(plan)}; }
     const items = [...seenI];
     for (const p of procs) for (const o in p.out) if (!seenI.has(o)) { seenI.add(o); items.push(o); }
     const ix = {}; items.forEach((k, i) => ix[k] = i);
@@ -365,6 +484,7 @@ const Engine = (() => {
     const a = analyze(cfg, solve(cfg, p2, [{item, rate: 1}]));
     return {score: a.score, error: a.error};
   }
-  return {POWER, init, options, defaultSel, selOf, proc, solveManual, solveOpt, solve, reach, pressAll, analyze, depths, simplex, costPerUnit, rawWeight, shards, extCfg, recCfg, allowed, pressPower, isGen, get R() { return R; }, get PRIM() { return PRIM; }, get OPTS() { return OPTS; }};
+  return {POWER, init, options, defaultSel, selOf, proc, solveManual, solveOpt, solve, reach, pressAll, analyze, depths, simplex, costPerUnit, rawWeight, shards, extCfg, recCfg, allowed, pressPower, isGen,
+    progress, altState, recipeReq, itemReq, bldReq, extReq, extOK, minerTier, belt, pipe, get R() { return R; }, get PRIM() { return PRIM; }, get OPTS() { return OPTS; }};
 })();
 if (typeof module !== "undefined") module.exports = Engine;

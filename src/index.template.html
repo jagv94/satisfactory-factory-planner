@@ -59,8 +59,8 @@
       <h2>Ajustes</h2>
       <div class="grid2">
         <label>Reloj por defecto (%) <input id="clock" type="number" min="1" max="250" step="1"></label>
-        <label>Cinta <select id="belt"></select></label>
-        <label>Tubería <select id="pipe"></select></label>
+        <label>Cinta <select id="belt"></select><small class="selw" id="beltNote"></small></label>
+        <label>Tubería <select id="pipe"></select><small class="selw" id="pipeNote"></small></label>
         <label>Nombres <select id="lang"><option value="es">Español</option><option value="en">English</option></select></label>
         <label>Iconos <select id="icons"><option value="auto">Del juego si existen</option><option value="glyph">Glifos propios</option></select></label>
         <label>Agrupar producción <select id="group"><option value="level">Por nivel</option><option value="building">Por máquina</option></select></label>
@@ -83,7 +83,7 @@
   <section class="card" id="resc">
     <div class="tabs" id="tabs" role="tablist">
       <button role="tab" data-t="prod">Producción</button><button role="tab" data-t="sankey">Diagrama</button><button role="tab" data-t="tree">Árbol</button>
-      <button role="tab" data-t="ext">Extracción</button><button role="tab" data-t="mach">Máquinas</button><button role="tab" data-t="energy">Energía</button><button role="tab" data-t="surp">Excedentes</button><button role="tab" data-t="alts">Alternativas</button>
+      <button role="tab" data-t="ext">Extracción</button><button role="tab" data-t="mach">Máquinas</button><button role="tab" data-t="energy">Energía</button><button role="tab" data-t="surp">Excedentes</button><button role="tab" data-t="alts">Desbloqueos</button>
     </div>
     <div id="v-prod"><input id="q" type="search" placeholder="Buscar en la tabla…" aria-label="Buscar objeto" class="search">
       <div class="scroll"><table id="prod" class="prod"></table></div>
@@ -123,6 +123,13 @@
     </div>
     <div id="v-surp" hidden><div class="scroll"><table id="surp"></table></div><p class="hint">Llévalos a un AWESOME Sink o elige recetas que los consuman.</p></div>
     <div id="v-alts" hidden>
+      <section class="prog" aria-labelledby="pgH">
+        <h3 id="pgH">Progreso de tu partida</h3>
+        <div class="row abar"><label class="pgsel">Hasta el <select id="pgTier"></select></label><button type="button" id="pgFit" hidden>Ajustar al tier</button></div>
+        <p class="hint top0" id="pgSum" role="status"></p>
+        <details id="pgMsBox"><summary id="pgMsSum">Hitos</summary><p class="hint top0">Marcados: completados. Los resaltados no coinciden con el tier elegido; «Ajustar al tier» los devuelve.</p><div id="pgMs"></div></details>
+        <details id="pgMamBox"><summary id="pgMamSum">MAM</summary><p class="hint top0">Marca los nodos investigados. Los Docs del juego no traen el orden de cada árbol, así que no se comprueba qué nodo va antes.</p><div id="pgMam"></div></details>
+      </section>
       <section class="adv" aria-labelledby="advH">
         <h3 id="advH"><span>Asesor de alternativas · fábrica «<span id="advName"></span>»</span><small id="advCrit"></small></h3>
         <div class="row abar"><div class="seg" id="advMode" role="group" aria-label="Qué evaluar"><button type="button" data-am="cand">Candidatas (bloqueadas)</button><button type="button" data-am="act">Activas (desbloqueadas)</button></div>
@@ -139,7 +146,7 @@
       </section>
       <h3>Lista de alternativas</h3>
       <div class="row"><input id="aq" type="search" placeholder="Buscar alternativa…" class="grow" aria-label="Buscar alternativa">
-        <select id="af" aria-label="Filtro"><option value="all">Todas</option><option value="on">Desbloqueadas</option><option value="off">Bloqueadas</option></select>
+        <select id="af" aria-label="Filtro"><option value="all">Todas</option><option value="on">Desbloqueadas</option><option value="off">Bloqueadas</option><option value="avail">Conseguibles</option></select>
         <button id="altAll">Marcar todas</button><button id="altNone">Ninguna</button></div>
       <p class="hint" id="altCount"></p>
       <div id="alts" class="alts"></div>

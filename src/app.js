@@ -49,6 +49,34 @@ document.addEventListener("error", e => { const t = e.target; if (t.tagName === 
 const searchKey = id => ((DB.items[id] || {}).es + " " + (DB.items[id] || {}).en).toLowerCase();
 const idByName = n => { n = n.trim().toLowerCase(); for (const [k, v] of Object.entries(DB.items)) if (v.es.toLowerCase() === n || v.en.toLowerCase() === n) return k; return null; };
 
+// ---------- progreso de la partida (filtro global en S.cfg.progress; sin él, o con tier null, todo desbloqueado)
+const PG = () => Engine.progress(S.cfg);
+const schName = sid => { const e = DB.progress.sch[sid]; if (!e) return sid; const n = e[S.lang] || e.en;
+  return e.t === "mam" ? `el nodo «${n}» del MAM (${DB.progress.trees[e.tree][S.lang]})` : e.t === "hub" ? `«${n}» (tier 0)` : `el hito «${n}» (tier ${e.tier})`; };
+// lo que falta, en texto: esquemas por marcar y, si hace falta, la alternativa que la incluye o conseguirla en un disco duro
+const reqText = (q, noDrive) => { if (!q) return ""; const t = q.sids.map(schName);
+  if (q.with) t.push(`la alternativa «${Engine.R[q.with][S.lang]}»`); else if (q.drive && !noDrive) t.push("conseguirla en un disco duro"); return t.join(" y "); };
+// fase del Space Elevator en curso con el tier elegido (DB.progress.phaseTier: tier más alto de cada fase)
+const phaseNow = tier => { const T = DB.progress.phaseTier; const k = T.findIndex(t => tier <= t); return k < 0 ? T.length : k + 1; };
+// selección guardada que ahora no se puede usar (bloqueada o por el progreso): se usa la de reserva y se conserva la elegida
+function selNote(plan, it) {
+  const want = (plan.sel || {})[it], cur = Engine.selOf(S.cfg, plan, it);
+  if (!want || want === cur || want === "import" || want === "manual") return "";
+  // motivo: una alternativa bloqueada en la lista (pero conseguible) o lo que falta del progreso
+  const lockedAlt = !!Engine.R[want] && Engine.R[want].alt && !!S.cfg.locked[want] && Engine.altState(S.cfg, want).state === "ok";
+  const why = lockedAlt ? "" : want.startsWith("x:") ? reqText(Engine.extReq(S.cfg, want.slice(2))) : Engine.R[want] ? reqText(Engine.recipeReq(S.cfg, want)) : "";
+  return `<small class="selw">Tu elección (${esc(optLabel(want))}) no está disponible${lockedAlt ? ": está bloqueada en Desbloqueos" : why ? ": requiere " + esc(why) : ""}. Se usa ${esc(optLabel(cur))}; al volver a permitirla, se recupera.</small>`;
+}
+const noprogText = np => `Con tu progreso no se puede fabricar ${np.targets.map(nm).join(", ")}. ` + np.blockers.slice(0, 4).map(b => `${nm(b.item)} requiere ${reqText(b) || "algo que aún no tienes"}`).join("; ")
+  + (np.blockers.length > 4 ? `; y ${np.blockers.length - 4} más` : "") + ". Marca más progreso en Desbloqueos o quita esos objetivos.";
+function progText() {
+  const pg = S.cfg.progress, Pz = PG(), PR = DB.progress;
+  if (!Pz.on) return "Progreso: todo desbloqueado (sin filtro).";
+  const n2 = sid => PR.sch[sid][S.lang], add = Object.keys(pg.add || {}).filter(x => PR.sch[x] && PR.sch[x].tier > pg.tier), rm = Object.keys(pg.rm || {}).filter(x => PR.sch[x] && PR.sch[x].tier <= pg.tier);
+  const mam = Object.values(PR.trees).map(t => [t, t.nodes.filter(x => Pz.done.has(x)).length]).filter(([, n]) => n).map(([t, n]) => `${t[S.lang]} (${n === t.nodes.length ? "todo" : n + " de " + t.nodes.length})`);
+  return `Progreso: hasta el tier ${pg.tier}` + (add.length ? ` · además: ${add.map(n2).join(", ")}` : "") + (rm.length ? ` · sin: ${rm.map(n2).join(", ")}` : "") + ` · MAM: ${mam.length ? mam.join(", ") : "nada"}.`;
+}
+
 // ---------- cálculo
 const costCache = new Map();
 function cost(item) {
@@ -66,6 +94,7 @@ const ERR = {cycle: "Las recetas elegidas forman un ciclo sin salida (p. ej. emp
   infeasible: "No hay solución con las recetas desbloqueadas y los límites actuales. Revisa los límites, desbloquea alternativas o permite recursos recolectados a mano. Si generas la energía en la fábrica, comprueba que no hayas excluido todos los generadores.",
   unbounded: "Sin techo: para maximizar pon límites a las materias primas (ojo: el Converter convierte unas en otras, así que conviene limitar todas).",
   iterations: "El optimizador no ha convergido. Simplifica los objetivos o cambia el criterio.",
+  noprog: "Con tu progreso no se puede fabricar algún objetivo.",
   press: "El reparto de la potencia de los Pressurizers entre los extractores de pozo no ha cuadrado tras varias vueltas, así que no se muestra ningún resultado. Prueba a cambiar el número de pozos o el reloj del fluido de pozo en Extracción, a cambiar el criterio o a excluir alguna receta."};
 
 // ---------- render
@@ -96,21 +125,32 @@ function renderHead(plan, A) {
   if (A.scale) k.unshift(["Escala máxima", "×" + nf(A.scale, 3)]);
   $("kpis").innerHTML = k.map(([a, b, c]) => `<div class="kpi"><b>${esc(b)}</b><span>${esc(a)}${c ? `<em>${esc(c)}</em>` : ""}</span></div>`).join("");
   const w = [];
-  if (A.error) w.push(ERR[A.error] || A.error);
+  if (A.error) w.push(A.error === "noprog" && A.res.noprog ? noprogText(A.res.noprog) : ERR[A.error] || A.error);
   // con error no hay pasos: todos los objetivos saldrían como déficit y el consejo de elegir receta confundiría
   if (!A.error) for (const [i, b] of Object.entries(A.balance)) if (b.net < -1e-6) w.push(`Déficit de ${nm(i)}: faltan ${nf(-b.net)} ${unit(i)}. Elige una receta que lo produzca o márcalo como externo.`);
   for (const m of energyWarnings(A)) w.push(m);
-  const bc = DB.belts[S.cfg.belt], pc = DB.pipes[S.cfg.pipe];
-  for (const r of ex) { const f = fluid(r.p.item), cap = f ? pc : bc, per = r.p.out[r.p.item]; if (per > cap + 1e-9) w.push(`Un extractor de ${nm(r.p.item)} da ${nf(per)} ${unit(r.p.item)}: supera la ${f ? "tubería" : "cinta"} ${f ? S.cfg.pipe : S.cfg.belt}.`); }
+  const bk = Engine.belt(S.cfg), pk = Engine.pipe(S.cfg), bc = DB.belts[bk], pc = DB.pipes[pk];
+  for (const r of ex) { const f = fluid(r.p.item), cap = f ? pc : bc, per = r.p.out[r.p.item]; if (per > cap + 1e-9) w.push(`Un extractor de ${nm(r.p.item)} da ${nf(per)} ${unit(r.p.item)}: supera la ${f ? "tubería" : "cinta"} ${f ? pk : bk}.`); }
+  const Pz = PG();
+  if (Pz.on) {
+    // con el filtro, lo que no se puede fabricar ni extraer pasa a externo (Manual): se dice qué falta
+    for (const r of R) if (r.p.kind === "import" && (plan.sel || {})[r.p.item] !== "import") w.push(`No puedes ${DB.items[r.p.item] && DB.items[r.p.item].raw ? "extraer" : "fabricar"} ${nm(r.p.item)} con tu progreso (requiere ${reqText(Engine.itemReq(S.cfg, r.p.item)) || "algo que aún no tienes"}): se trata como externo.`);
+    const fname = sid => (DB.progress.sch[sid] || {})[S.lang];
+    if (!Pz.overclock && R.some(r => r.build && r.p.clock > 1 + 1e-9)) w.push(`Hay relojes por encima del 100 %, pero aún no has investigado «${fname(DB.progress.feat.overclock)}» en el MAM.`);
+    if (!Pz.sloop && R.some(r => r.sloops > 0)) w.push(`Hay Somersloops en las máquinas, pero aún no has investigado «${fname(DB.progress.feat.sloop)}» en el MAM.`);
+  }
   for (const r of A.raw) { const L = S.cfg.limits[r.item]; if (L !== undefined && L !== null && L !== "" && r.rate > +L + 1e-6) w.push(`${nm(r.item)}: ${nf(r.rate)} supera tu límite de ${nf(+L)}.`); }
   $("warns").innerHTML = w.map(x => `<div>${esc(x)}</div>`).join("");
 }
 function renderTargets(plan) {
-  const presets = [...PHASES.map(p => p[0]), "Todas las piezas finales", "Vacío"];
-  $("preset").innerHTML = presets.map(p => `<option${p === S.preset ? " selected" : ""}>${esc(p)}</option>`).join("");
+  const presets = [...PHASES.map(p => p[0]), "Todas las piezas finales", "Vacío"], Pz = PG();
+  // con progreso: la fase en curso y, en las siguientes, el tier que hace falta para fabricar sus piezas
+  const lab = p => { const k = PHASES.findIndex(x => x[0] === p); if (!Pz.on || k < 0) return p; const need = DB.progress.phaseTier[k];
+    return p + (k + 1 === phaseNow(Pz.tier) ? " (en curso)" : Pz.tier < need ? ` (requiere tier ${need})` : ""); };
+  $("preset").innerHTML = presets.map(p => `<option value="${esc(p)}"${p === S.preset ? " selected" : ""}>${esc(lab(p))}</option>`).join("");
   $("targets").innerHTML = plan.targets.length ? plan.targets.map((t, k) => {
     const c = cost(t.item);
-    return `<div class="tg">${ic(t.item)}<div><b>${esc(nm(t.item))}</b><small>${c.error ? "sin solución con estas recetas" : "coste ≈ " + nf(c.score * 100, c.score < .01 ? 3 : 1) + " % del mapa por cada 1/min"}</small></div>
+    return `<div class="tg">${ic(t.item)}<div><b>${esc(nm(t.item))}</b><small>${c.error ? (c.error === "noprog" ? "no se puede fabricar con tu progreso" : "sin solución con estas recetas") : "coste ≈ " + nf(c.score * 100, c.score < .01 ? 3 : 1) + " % del mapa por cada 1/min"}</small></div>
       <input type="number" min="0" step="0.1" value="${t.rate}" data-fk="t:${k}" data-act="trate" data-k="${k}" aria-label="Cantidad de ${esc(nm(t.item))}">
       <button class="x" data-act="tdel" data-k="${k}" aria-label="Quitar ${esc(nm(t.item))}">×</button></div>`;
   }).join("") : `<p class="hint">Sin objetivos. Elige un preset o añade piezas.</p>`;
@@ -130,8 +170,13 @@ function renderCalc(plan) {
 }
 function renderSettings() {
   $("clock").value = Math.round(S.cfg.clock * 100);
-  $("belt").innerHTML = Object.entries(DB.belts).map(([k, v]) => `<option value="${k}"${k === S.cfg.belt ? " selected" : ""}>${k} · ${nf(v, 0)}/min</option>`).join("");
-  $("pipe").innerHTML = Object.entries(DB.pipes).map(([k, v]) => `<option value="${k}"${k === S.cfg.pipe ? " selected" : ""}>${k} · ${nf(v, 0)} m³/min</option>`).join("");
+  // con progreso: solo las desbloqueadas; si la guardada es mayor, se usa la mayor disponible y se avisa (la guardada se conserva)
+  const Pz = PG(), upTo = (o, max) => { if (!Pz.on || !max) return Object.entries(o); const k = Object.keys(o); return Object.entries(o).slice(0, k.indexOf(max) + 1); };
+  const bk = Engine.belt(S.cfg), pk = Engine.pipe(S.cfg);
+  $("belt").innerHTML = upTo(DB.belts, Pz.belt).map(([k, v]) => `<option value="${k}"${k === bk ? " selected" : ""}>${k} · ${nf(v, 0)}/min</option>`).join("");
+  $("pipe").innerHTML = upTo(DB.pipes, Pz.pipe).map(([k, v]) => `<option value="${k}"${k === pk ? " selected" : ""}>${k} · ${nf(v, 0)} m³/min</option>`).join("");
+  $("beltNote").textContent = bk !== S.cfg.belt ? `Se usa ${bk}, la mayor que tienes; ${S.cfg.belt} vuelve cuando la desbloquees.` : "";
+  $("pipeNote").textContent = Pz.on && !Pz.pipe ? "Aún no tienes tuberías." : pk !== S.cfg.pipe ? `Se usa ${pk}, la mayor que tienes; ${S.cfg.pipe} vuelve cuando la desbloquees.` : "";
   $("lang").value = S.lang; $("icons").value = S.icons; $("group").value = S.group;
   $("iconInfo").textContent = iconsFound ? "Carpeta icons/ encontrada: se usan los iconos del juego." : location.protocol === "file:" ? "No hay carpeta icons/ junto a la herramienta: se usan glifos propios (ver README)." : "En la versión web se usan glifos propios; los iconos del juego solo funcionan abriendo el archivo descargado (ver README).";
 }
@@ -139,11 +184,12 @@ function renderExt(plan) {
   const raws = Object.keys(Engine.OPTS).sort((a, b) => nm(a).localeCompare(nm(b)));
   const pur = Object.keys(DB.purity);
   $("exttab").innerHTML = `<thead><tr><th>Recurso</th><th>Fuente</th><th>Tier</th><th>Pureza</th><th class="n">Reloj %</th><th class="n" title="Resource Well Pressurizers: uno por pozo">Pozos (Pressurizers)</th><th class="n">Límite /min</th></tr></thead><tbody>` + raws.map(i => {
-    const s = Engine.selOf(S.cfg, plan, i), c = Engine.extCfg(S.cfg, i), e = s.startsWith("x:") ? DB.extractors[s.slice(2)] : null;
+    const s = Engine.selOf(S.cfg, plan, i), c = Engine.extCfg(S.cfg, i), e = s.startsWith("x:") ? DB.extractors[s.slice(2)] : null, Pz = PG();
+    const tiers = Object.keys(DB.extractors.miner.tiers).filter(t => !Pz.on || Pz.bld[DB.extractors.miner.tiers[t].id]), mt = Engine.minerTier(S.cfg, DB.extractors.miner.tiers[c.tier] ? c.tier : "Mk.3");
     const opts = Engine.options(S.cfg, i).map(o => `<option value="${esc(o)}"${o === s ? " selected" : ""}>${esc(o.startsWith("x:") ? optLabel(o) : o === "import" ? "Externo" : "Converter: " + Engine.R[o][S.lang])}</option>`).join("");
     const L = S.cfg.limits[i];
-    return `<tr><td class="nw">${ic(i)} ${esc(nm(i))}</td><td><select data-fk="xs:${i}" data-act="sel" data-item="${i}" aria-label="Fuente de ${esc(nm(i))}">${opts}</select></td>
-      <td>${s === "x:miner" ? `<select data-fk="xt:${i}" data-act="ext" data-item="${i}" data-f="tier">${Object.keys(DB.extractors.miner.tiers).map(t => `<option${t === c.tier ? " selected" : ""}>${t}</option>`).join("")}</select>` : "–"}</td>
+    return `<tr><td class="nw">${ic(i)} ${esc(nm(i))}</td><td><select data-fk="xs:${i}" data-act="sel" data-item="${i}" aria-label="Fuente de ${esc(nm(i))}">${opts}</select>${selNote(plan, i)}</td>
+      <td>${s === "x:miner" ? `<select data-fk="xt:${i}" data-act="ext" data-item="${i}" data-f="tier">${tiers.map(t => `<option${t === mt ? " selected" : ""}>${t}</option>`).join("")}</select>${mt !== c.tier && ((S.cfg.ext || {})[i] || {}).tier ? `<small class="selw">Elegiste ${esc(c.tier)}; con tu progreso, ${esc(mt)}.</small>` : ""}` : "–"}</td>
       <td>${e && e.purity !== false ? `<select data-fk="xp:${i}" data-act="ext" data-item="${i}" data-f="purity">${pur.map(p => `<option${p === c.purity ? " selected" : ""}>${p}</option>`).join("")}</select>` : "–"}</td>
       <td class="n">${e ? `<input type="number" min="1" max="250" step="1" value="${Math.round(c.clock * 100)}" data-fk="xc:${i}" data-act="ext" data-item="${i}" data-f="clock" class="w5">` : "–"}</td>
       <td class="n">${s === "x:well" ? `<input type="number" min="0" step="1" value="${c.wells ?? ""}" placeholder="sin indicar" data-fk="xw:${i}" data-act="ext" data-item="${i}" data-f="wells" class="w7" aria-label="Pozos (Pressurizers) de ${esc(nm(i))}">` : "–"}</td>
@@ -168,7 +214,7 @@ function renderTabs(plan, A) {
   f(plan, A);
 }
 function renderProd(plan, A) {
-  const opt = plan.mode === "opt", bc = DB.belts[S.cfg.belt], pc = DB.pipes[S.cfg.pipe];
+  const opt = plan.mode === "opt", bc = DB.belts[Engine.belt(S.cfg)], pc = DB.pipes[Engine.pipe(S.cfg)];
   const isRaw = r => r.p.kind === "extract" || r.p.kind === "manual" || r.p.kind === "import";
   const lvl = r => isRaw(r) ? -1 : A.depth[r.p.item] ?? 0;
   const rows = [...A.rows].filter(r => r.x > 1e-9).sort((a, b) => S.group === "building" ? bnm(a.p).localeCompare(bnm(b.p)) || lvl(b) - lvl(a) : lvl(b) - lvl(a) || nm(a.p.item).localeCompare(nm(b.p.item)));
@@ -184,7 +230,7 @@ function renderProd(plan, A) {
     const extra = b.prod - r.rate;
     let recipe;
     if (r.by) recipe = `<span class="m">producido por otras recetas</span>`;
-    else if (!opt) recipe = `<select data-fk="s:${it}" data-act="sel" data-item="${it}" class="${r.p.recipe && r.p.recipe.alt ? "alt" : ""}" aria-label="Receta de ${esc(nm(it))}">${(cur => Engine.options(S.cfg, it, cur).map(o => `<option value="${esc(o)}"${o === cur ? " selected" : ""}>${esc(optLabel(o))}</option>`).join(""))(Engine.selOf(S.cfg, plan, it))}</select>`;
+    else if (!opt) recipe = `<select data-fk="s:${it}" data-act="sel" data-item="${it}" class="${r.p.recipe && r.p.recipe.alt ? "alt" : ""}" aria-label="Receta de ${esc(nm(it))}">${(cur => Engine.options(S.cfg, it, cur).map(o => `<option value="${esc(o)}"${o === cur ? " selected" : ""}>${esc(optLabel(o))}</option>`).join(""))(Engine.selOf(S.cfg, plan, it))}</select>${selNote(plan, it)}`;
     else recipe = `<span class="${r.p.recipe && r.p.recipe.alt ? "alt" : ""}">${esc(r.p.recipe ? (r.p.recipe.alt ? "Alt: " : "") + recName(r.p.recipe) : optLabel(r.p.kind === "extract" ? "x:" + r.p.ext : r.p.kind))}</span><small>${esc(bnm(r.p))}</small>${r.p.recipe ? ` <button class="x" data-act="ban" data-id="${r.p.id}" title="Excluir esta receta del optimizador">excluir</button>` : ""}`;
     const isM = r.p.kind === "recipe" || r.p.kind === "extract";
     const slots = r.p.kind === "recipe" ? r.p.b.slots : 0;
@@ -296,7 +342,7 @@ function machToggle(keys, open) {
 // exportar: el texto queda siempre en el cuadro (por si el navegador bloquea el portapapeles o la descarga)
 function machExport(how, btn) {
   const fmt = $("mFmt").value, rep = machReport(compute()), name = P().name, c = Report.cost(rep, {db: DB, lang: S.lang});
-  const txt = fmt === "csv" ? Report.csv(rep) : fmt === "csvm" ? Report.costCsv(c, name) : Report.markdown(rep, name, c), box = $("mOut"), isCsv = fmt !== "md";
+  const txt = fmt === "csv" ? Report.csv(rep) : fmt === "csvm" ? Report.costCsv(c, name) : Report.markdown(rep, name, c, progText()), box = $("mOut"), isCsv = fmt !== "md";
   box.hidden = false; box.value = txt; box.select();
   const say = m => { btn.textContent = m; setTimeout(() => { btn.textContent = how === "copy" ? "Copiar" : "Descargar"; }, 2200); };
   if (how === "copy") {
@@ -355,20 +401,53 @@ function renderSurp(plan, A) {
     sp.map(([i, b]) => `<tr><td class="nw">${ic(i)} ${esc(nm(i))}</td><td class="n">${nf(b.prod)}</td><td class="n">${nf(b.cons + b.target)}</td><td class="n"><b>${nf(b.net)}</b> <span class="u">${unit(i)}</span></td></tr>`).join("") + "</tbody>"
     : `<tbody><tr><td class="ok">Sin excedentes: todo lo producido se consume.</td></tr></tbody>`;
 }
+function renderProgress() {
+  const pg = S.cfg.progress, Pz = PG(), PR = DB.progress, on = Pz.on;
+  $("pgTier").innerHTML = `<option value="">Todo desbloqueado (sin filtro)</option>` + [...Array(10).keys()].map(t => `<option value="${t}"${on && pg.tier === t ? " selected" : ""}>${t ? "tier " + t : "tier 0 (solo el HUB)"}</option>`).join("");
+  $("pgMsBox").hidden = $("pgMamBox").hidden = !on;
+  if (!on) { $("pgFit").hidden = true; $("pgSum").textContent = "Sin filtro: se usan todas las recetas, edificios y alternativas desbloqueadas. Elige hasta qué tier has llegado para usar solo lo que tienes en tu partida."; return; }
+  const sch = Object.entries(PR.sch), ms = sch.filter(([, e]) => e.t === "ms" || e.t === "hub"), mamAll = sch.filter(([, e]) => e.t === "mam");
+  // diferencia respecto al tier: se conserva al cambiar de tier, se resalta y «Ajustar al tier» la quita
+  const diff = sid => (PR.sch[sid].tier <= pg.tier) !== Pz.done.has(sid), nd = ms.filter(([x]) => diff(x)).length;
+  $("pgFit").hidden = !nd;
+  const normal = DB.recipes.filter(r => !r.alt), nOK = normal.filter(r => Engine.allowed(S.cfg, r.id)).length, blds = Object.keys(DB.buildings), nB = blds.filter(b => Pz.bld[b]).length;
+  const mamN = mamAll.filter(([x]) => Pz.done.has(x)).length;
+  $("pgSum").textContent = `${nOK} de ${normal.length} recetas normales · ${nB} de ${blds.length} edificios de producción y energía · cinta hasta ${Pz.belt} · ${Pz.pipe ? "tubería hasta " + Pz.pipe : "sin tuberías"} · Miner ${Pz.miner} · ${mamN} de ${mamAll.length} nodos del MAM`
+    + ` · fase ${phaseNow(pg.tier)} del Space Elevator en curso` + (nd ? ` · ${nd} ${nd === 1 ? "hito distinto" : "hitos distintos"} del tier` : "") + ".";
+  $("pgMsSum").textContent = `Hitos · ${ms.filter(([x]) => Pz.done.has(x)).length} de ${ms.length} completados` + (nd ? ` · ${nd} ${nd === 1 ? "distinto" : "distintos"} del tier` : "");
+  const byT = {}; for (const [x, e] of ms) (byT[e.tier] = byT[e.tier] || []).push([x, e]);
+  const chip = (x, e, act) => `<label class="pgc${act === "pgms" && diff(x) ? " diff" : ""}"><input type="checkbox" data-act="${act}" data-id="${x}"${Pz.done.has(x) ? " checked" : ""}> ${esc(e[S.lang])}</label>`;
+  $("pgMs").innerHTML = Object.keys(byT).sort((a, b) => a - b).map(t => `<div class="pgt"><b>Tier ${t}${+t ? "" : " · HUB"}</b><div>${byT[t].map(([x, e]) => chip(x, e, "pgms")).join("")}</div></div>`).join("");
+  $("pgMamSum").textContent = `MAM · ${mamN} de ${mamAll.length} nodos investigados`;
+  $("pgMam").innerHTML = Object.entries(PR.trees).map(([k, t]) => { const n = t.nodes.filter(x => Pz.done.has(x)).length;
+    return `<div class="pgt"><label class="pgtree"><input type="checkbox" data-act="pgtree" data-tree="${k}"${n === t.nodes.length ? " checked" : ""}${n && n < t.nodes.length ? ' data-mixed="1"' : ""}> <b>${esc(t[S.lang])}</b> <small>${n} de ${t.nodes.length}</small></label><div>${t.nodes.map(x => chip(x, PR.sch[x], "pgmam")).join("")}</div></div>`; }).join("");
+  for (const x of $("pgMam").querySelectorAll("[data-mixed]")) x.indeterminate = true;
+}
 function renderAlts() {
   const alts = DB.recipes.filter(r => r.alt), q = ($("aq").value || "").trim().toLowerCase(), fil = $("af").value;
-  const L = S.cfg.locked;
+  const L = S.cfg.locked, Pz = PG(), st = {};
+  for (const r of alts) st[r.id] = Engine.altState(S.cfg, r.id);
+  // con filtro: las que da el MAM salen marcadas y bloqueadas; las que aún no se pueden conseguir, desmarcadas y desactivadas con
+  // lo que falta (su marca en la lista se conserva y vuelve a contar cuando el progreso lo permita)
+  const isOn = r => st[r.id].state === "mam" || (!L[r.id] && st[r.id].state === "ok");
   const byP = {};
   for (const r of alts) { const p = Object.keys(r.out)[0]; (byP[p] = byP[p] || []).push(r); }
-  const n = alts.filter(r => !L[r.id]).length;
-  $("altCount").textContent = `${n} de ${alts.length} alternativas desbloqueadas`;
+  renderProgress();
+  const n = alts.filter(r => !L[r.id]).length, cnt = x => alts.filter(r => st[r.id].state === x).length, bad = alts.filter(r => !L[r.id] && st[r.id].state === "no").length;
+  $("altCount").textContent = !Pz.on ? `${n} de ${alts.length} alternativas desbloqueadas` : `${alts.filter(isOn).length} de ${alts.length} alternativas en uso · ${cnt("ok") + cnt("mam")} se pueden conseguir con tu progreso`
+    + (cnt("mam") ? ` (${cnt("mam")} por el MAM)` : "") + (bad ? ` · ${bad} ${bad === 1 ? "desbloqueada en tu lista que tu progreso aún no permite: se usará" : "desbloqueadas en tu lista que tu progreso aún no permite: se usarán"} cuando lo permita` : "");
   renderAdvisor();
   const fmtIO = o => Object.entries(o).map(([k, v]) => `${ic(k)}${nf(v)} ${esc(nm(k))}`).join(" + ");
+  const incl = id => DB.recipes.filter(x => ((DB.progress.rec[x.id] || {}).with) === id).map(x => x[S.lang]);
+  const tag = r => { const a = st[r.id], inc = incl(r.id);
+    return (a.state === "mam" ? `<small class="pgtag">Por el MAM: ${esc(a.via.map(x => DB.progress.sch[x][S.lang] + " (" + DB.progress.trees[DB.progress.sch[x].tree][S.lang] + ")").join(", "))}</small>`
+      : a.state === "no" ? `<small class="pgtag no">Requiere ${esc(reqText(a.req, true) || "algo que aún no tienes")}</small>` : "") + (inc.length ? `<small class="pgtag">Incluye ${esc(inc.join(", "))}</small>` : ""); };
   $("alts").innerHTML = Object.keys(byP).sort((a, b) => nm(a).localeCompare(nm(b))).map(p => {
-    const rs = byP[p].filter(r => (fil === "all" || (fil === "on") === !L[r.id]) && (!q || (r.es + " " + r.en + " " + searchKey(p)).toLowerCase().includes(q)));
+    const rs = byP[p].filter(r => (fil === "all" || (fil === "avail" ? st[r.id].state !== "no" : (fil === "on") === isOn(r))) && (!q || (r.es + " " + r.en + " " + searchKey(p)).toLowerCase().includes(q)));
     if (!rs.length) return "";
-    return `<div class="ag"><h3>${ic(p)} ${esc(nm(p))}</h3>${rs.map(r => `<label class="alt-r"><input type="checkbox" data-act="lock" data-id="${r.id}"${L[r.id] ? "" : " checked"}>
-      <span><b>${esc(r[S.lang])}</b> <small>${esc(DB.buildings[r.building][S.lang])}</small><br><small class="io">${fmtIO(r.in)} → ${fmtIO(r.out)}</small></span></label>`).join("")}</div>`;
+    return `<div class="ag"><h3>${ic(p)} ${esc(nm(p))}</h3>${rs.map(r => { const dis = st[r.id].state !== "ok";
+      return `<label class="alt-r${dis ? " dis" : ""}"><input type="checkbox" data-act="lock" data-id="${r.id}"${isOn(r) ? " checked" : ""}${dis ? " disabled" : ""}>
+      <span><b>${esc(r[S.lang])}</b> <small>${esc(DB.buildings[r.building][S.lang])}</small><br><small class="io">${fmtIO(r.in)} → ${fmtIO(r.out)}</small>${tag(r)}</span></label>`; }).join("")}</div>`;
   }).join("") || `<p class="hint">Ninguna coincide.</p>`;
 }
 
@@ -421,7 +500,8 @@ function renderAdvisor() {
   $("advScope").hidden = !cand; $("advListBox").hidden = !list;
   const L = S.cfg.locked;
   $("advChips").innerHTML = adv.list.map(id => { const r = Engine.R[id]; if (!r) return "";
-    return `<span class="chip${L[id] ? "" : " off"}">${ic(altProd(r))} ${esc(r[S.lang])}${L[id] ? "" : " <small>(ya desbloqueada)</small>"} <button type="button" class="x" data-act="advrm" data-id="${id}" aria-label="Quitar ${esc(r[S.lang])} de mi lista">×</button></span>`; }).join("")
+    const sa = Engine.altState(S.cfg, id).state;
+    return `<span class="chip${L[id] && sa === "ok" ? "" : " off"}">${ic(altProd(r))} ${esc(r[S.lang])}${sa === "no" ? " <small>(aún no se puede conseguir)</small>" : sa === "mam" ? " <small>(ya la tienes por el MAM)</small>" : L[id] ? "" : " <small>(ya desbloqueada)</small>"} <button type="button" class="x" data-act="advrm" data-id="${id}" aria-label="Quitar ${esc(r[S.lang])} de mi lista">×</button></span>`; }).join("")
     || `<span class="hint top0">Tu lista está vacía: añade las alternativas que te ofrece un disco duro.</span>`;
   const nList = adv.list.filter(id => L[id]).length;
   $("advRun").disabled = adv.running || (list && !nList);
@@ -431,10 +511,13 @@ function renderAdvisor() {
   const N = j ? j.queue.length : 0, secs = !j ? "" : j.ms < 50 ? "menos de 0,1 s" : nf(j.ms / 1000, 1) + " s";
   $("advBar").hidden = !(show && adv.running); $("advBar").max = Math.max(1, N); $("advBar").value = j ? j.done : 0;
   const fast = j ? j.rows.filter(r => r.fast).length : 0;
-  $("advProg").textContent = !show ? "" : adv.running ? `Evaluando: ${j.done} de ${N} · ${secs}` : j.cancelled ? `Cancelado: ${j.done} de ${N} evaluadas` : `${j.rows.length} ${j.rows.length === 1 ? "alternativa" : "alternativas"}: ${N} ${N === 1 ? "recalculada" : "recalculadas"} en ${secs}${fast ? `, ${fast} ${fast === 1 ? "descartada" : "descartadas"} sin recalcular` : ""}.`;
+  const nu = j && j.unavail ? j.unavail.length : 0;
+  $("advProg").textContent = !show ? "" : adv.running ? `Evaluando: ${j.done} de ${N} · ${secs}` : j.cancelled ? `Cancelado: ${j.done} de ${N} evaluadas` : `${j.rows.length} ${j.rows.length === 1 ? "alternativa" : "alternativas"}: ${N} ${N === 1 ? "recalculada" : "recalculadas"} en ${secs}${fast ? `, ${fast} ${fast === 1 ? "descartada" : "descartadas"} sin recalcular` : ""}.`
+    + (nu ? ` ${nu} ${nu === 1 ? "no se evalúa: aún no se puede conseguir" : "no se evalúan: aún no se pueden conseguir"} con tu progreso.` : "");
   // avisos
   const wells = Object.keys(Engine.pressAll(S.cfg)).length > 0;
-  const notes = [`<b>Cada alternativa se evalúa por separado, sobre tu plan actual.</b> Algunas solo compensan combinadas con otras (por ejemplo, una que produce un intermedio que solo usa otra alternativa): que aquí no aporten no quiere decir que no sirvan nunca. Puede recomendar alternativas que todavía no puedes conseguir en tu partida (aún no hay filtro por tier).`];
+  const notes = [`<b>Cada alternativa se evalúa por separado, sobre tu plan actual.</b> Algunas solo compensan combinadas con otras (por ejemplo, una que produce un intermedio que solo usa otra alternativa): que aquí no aporten no quiere decir que no sirvan nunca. ` + (PG().on ? `Solo se evalúan las alternativas que tu progreso permite conseguir en un disco duro (las que da el MAM ya cuentan como tuyas).`
+    : `Puede recomendar alternativas que todavía no puedes conseguir: indica tu progreso arriba para filtrarlas.`)];
   if (!opt) notes.push(`Tu fábrica está en Manual: la base es el plan óptimo con tus alternativas actuales (el de «Optimizar», sin maximizar), no tu selección manual. Desbloquear una alternativa solo la añade a los desplegables.`);
   notes.push(wells ? `Tienes pozos (Pressurizers) indicados en Extracción: su potencia se reparte con una aproximación, así que aquí desbloquear una alternativa puede empeorar algo el criterio (o bloquearla, mejorarlo). Cambios de menos del 0,01 % del criterio cuentan como «sin cambio».`
     : `Con el criterio de la fábrica, desbloquear una alternativa nunca empeora el plan (ni bloquearla lo mejora). Cambios de menos del 0,01 % del criterio cuentan como «sin cambio».`);
@@ -466,6 +549,12 @@ function renderAdvisor() {
 }
 
 // ---------- acciones
+// hito marcado o desmarcado a mano: se guarda solo si difiere de lo que da el tier (add: por encima; rm: por debajo)
+function progSet(g, id, on) {
+  const base = DB.progress.sch[id].tier <= g.tier;
+  g.add = g.add || {}; g.rm = g.rm || {}; delete g.add[id]; delete g.rm[id];
+  if (on !== base) (on ? g.add : g.rm)[id] = true;
+}
 function applyPreset() {
   const name = $("preset").value, base = Math.max(0, +$("base").value || 0);
   const used = new Set(); DB.recipes.forEach(r => Object.keys(r.in).forEach(i => used.add(i)));
@@ -486,6 +575,10 @@ document.addEventListener("change", e => {
   else if (a === "rclock") set(() => { const rc = plan.rc[t.dataset.id] = plan.rc[t.dataset.id] || {}; rc.clock = Math.min(2.5, Math.max(0.01, (+t.value || 100) / 100)); });
   else if (a === "rsloop") set(() => { const rc = plan.rc[t.dataset.id] = plan.rc[t.dataset.id] || {}; rc.sloops = Math.max(0, Math.round(+t.value || 0)); });
   else if (a === "lock") set(() => { Advisor.setUnlocked(S.cfg, t.dataset.id, t.checked); });
+  else if (t.id === "pgTier") set(() => { const v = t.value; if (v === "") { if (S.cfg.progress) S.cfg.progress.tier = null; } else S.cfg.progress = Object.assign({add: {}, rm: {}, mam: {}}, S.cfg.progress || {}, {tier: +v}); });
+  else if (a === "pgms") set(() => { progSet(S.cfg.progress, t.dataset.id, t.checked); });
+  else if (a === "pgmam") set(() => { const m = S.cfg.progress.mam = S.cfg.progress.mam || {}; if (t.checked) m[t.dataset.id] = true; else delete m[t.dataset.id]; });
+  else if (a === "pgtree") set(() => { const m = S.cfg.progress.mam = S.cfg.progress.mam || {}; for (const x of DB.progress.trees[t.dataset.tree].nodes) { if (t.checked) m[x] = true; else delete m[x]; } });
   else if (t.id === "plan") set(() => { S.cur = +t.value; });
   else if (t.id === "pname") set(() => { P().name = t.value.trim() || "Sin nombre"; });
   else if (t.id === "clock") set(() => { S.cfg.clock = Math.min(2.5, Math.max(0.01, (+t.value || 100) / 100)); });
@@ -524,7 +617,10 @@ document.addEventListener("click", e => {
     $("addItem").value = "";
   }
   else if (t.id === "mManual" || t.id === "mOpt") set(() => { plan.mode = t.id === "mOpt" ? "opt" : "manual"; });
-  else if (t.id === "pNew") set(() => { S.plans.push(newPlan("Fábrica " + (S.plans.length + 1))); S.cur = S.plans.length - 1; });
+  // con progreso, la fábrica nueva empieza con las piezas de la fase del Space Elevator en curso
+  else if (t.id === "pNew") set(() => { const Pz = PG(), ph = Pz.on ? PHASES[phaseNow(Pz.tier) - 1] : null;
+    S.plans.push(newPlan("Fábrica " + (S.plans.length + 1), ph ? ph[1].map(item => ({item, rate: 1})) : [])); if (ph) S.preset = ph[0]; S.cur = S.plans.length - 1; });
+  else if (t.id === "pgFit") set(() => { S.cfg.progress.add = {}; S.cfg.progress.rm = {}; });
   else if (t.id === "pDup") set(() => { const c = JSON.parse(JSON.stringify(plan)); c.name += " (copia)"; S.plans.push(c); S.cur = S.plans.length - 1; });
   else if (t.id === "pDel") {
     if (S.plans.length < 2) return;
