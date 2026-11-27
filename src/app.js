@@ -257,7 +257,35 @@ function renderMach(plan, A) {
     (h ? h + `<tbody><tr class="tot"><td>Total</td><td></td><td></td><td class="n">${nf(t.units, 0)}</td><td></td><td class="n">${nf(t.shards, 0)}</td><td class="n">${nf(t.sloops, 0)}</td><td class="n">${nf(t.cons, 1)}</td></tr></tbody>`
       : `<tbody><tr><td colspan="8" class="m">Sin máquinas: añade objetivos.</td></tr></tbody>`);
   for (const id of ["mOpen", "mClose", "mCopy", "mDl"]) $(id).disabled = !h;
+  renderCost(plan, rep);
   $("machNote").textContent = (A.energy.gen ? "El total de MW es el consumo; los generadores aparecen con su producción (+). " : "") + (A.energy.missingWells.length ? missingWellsText(A) : "");
+}
+// coste de construcción de la fábrica activa (src/report.js): materiales, por tipo de edificio y especiales
+let costSort = "qty", costLast = null;  // orden de la tabla de materiales (en memoria, no se guarda)
+function renderCost(plan, rep) {
+  const c = costLast = Report.cost(rep, {db: DB, lang: S.lang}), N = Report.NOTE;
+  $("costName").textContent = plan.name;
+  $("costSum").innerHTML = rep.sections.length ? `Coste de construcción de esta fábrica: ${nf(c.materials.length, 0)} materiales distintos · ${nf(c.points, 0)} puntos del Sink. <a href="#costH" data-go="costH">Ver el coste ↓</a>` : "";
+  $("costScope").textContent = "Solo la fábrica activa (selector «Fábrica»). " + N.units;
+  for (const b of $("costSort").querySelectorAll("button")) b.setAttribute("aria-pressed", b.dataset.cs === costSort);
+  renderCostMat();
+  const ls = l => `<div class="ls">${l.map(x => `<div>${nf(x.qty, 0)} ${esc(x.name)}</div>`).join("")}</div>`;
+  $("cbld").innerHTML = c.buildings.length ? `<thead><tr><th>Edificio</th><th class="n">Unidades</th><th>Coste unitario</th><th>Coste total</th><th class="n">Puntos del Sink</th><th class="n">%</th></tr></thead><tbody>` +
+    c.buildings.map(b => `<tr><td><b>${esc(b.name)}</b><small>${esc(b.section)}</small></td><td class="n">${nf(b.units, 0)}</td><td>${ls(b.unit)}</td><td>${ls(b.total)}</td><td class="n">${nf(b.points, 0)}</td><td class="n">${Report.pctTxt(b.pct)}</td></tr>`).join("") +
+    `<tr class="tot"><td>Total</td><td class="n">${nf(c.buildings.reduce((a, b) => a + b.units, 0), 0)}</td><td></td><td></td><td class="n">${nf(c.points, 0)}</td><td class="n">100 %</td></tr></tbody>`
+    : `<tbody><tr><td class="m">Sin edificios.</td></tr></tbody>`;
+  $("cspec").innerHTML = `<thead><tr><th>Material</th><th class="n">Cantidad</th></tr></thead><tbody>` +
+    c.specials.map(s => `<tr><td><div class="obj">${DB.items[s.item] ? ic(s.item) : ""}<b>${esc(s.name)}</b></div></td><td class="n">${nf(s.qty, 0)}</td></tr>`).join("") + "</tbody>";
+  $("cnotes").innerHTML = [...c.workshop.map(w => `<p><sup>¹</sup> ${esc(w.name)}: ${esc(Report.workshopText(c, w))}.</p>`), ...[N.points, N.specials, N.excluded].map(t => `<p>${esc(t)}</p>`)].join("")
+    + (c.missing.length ? `<p class="m">Sin coste en los datos: ${esc(c.missing.join(", "))}.</p>` : "");
+}
+function renderCostMat() {
+  const c = costLast; if (!c) return;
+  const W = new Set(c.workshop.map(w => w.item)), tip = ` title="Se fabrica en el ${esc(c.workshopName)}"`;
+  $("cmat").innerHTML = c.materials.length ? `<thead><tr><th>Material</th><th class="n">Cantidad</th><th class="n">Puntos del Sink</th></tr></thead><tbody>` +
+    Report.sortMaterials(c.materials, costSort).map(m => `<tr><td><div class="obj">${ic(m.item)}<b>${esc(m.name)}</b>${W.has(m.item) ? `<sup${tip}>¹</sup>` : ""}</div></td><td class="n">${nf(m.qty, 0)}</td><td class="n">${nf(m.points, 0)}</td></tr>`).join("") +
+    `<tr class="tot"><td>Total</td><td></td><td class="n">${nf(c.points, 0)}</td></tr></tbody>`
+    : `<tbody><tr><td class="m">Sin materiales: añade objetivos.</td></tr></tbody>`;
 }
 // desplegar/plegar sin volver a pintar (no pasa por set(): no es un cambio del plan)
 function machToggle(keys, open) {
@@ -267,8 +295,8 @@ function machToggle(keys, open) {
 }
 // exportar: el texto queda siempre en el cuadro (por si el navegador bloquea el portapapeles o la descarga)
 function machExport(how, btn) {
-  const fmt = $("mFmt").value, rep = machReport(compute()), name = P().name;
-  const txt = fmt === "csv" ? Report.csv(rep) : Report.markdown(rep, name), box = $("mOut");
+  const fmt = $("mFmt").value, rep = machReport(compute()), name = P().name, c = Report.cost(rep, {db: DB, lang: S.lang});
+  const txt = fmt === "csv" ? Report.csv(rep) : fmt === "csvm" ? Report.costCsv(c, name) : Report.markdown(rep, name, c), box = $("mOut"), isCsv = fmt !== "md";
   box.hidden = false; box.value = txt; box.select();
   const say = m => { btn.textContent = m; setTimeout(() => { btn.textContent = how === "copy" ? "Copiar" : "Descargar"; }, 2200); };
   if (how === "copy") {
@@ -278,8 +306,9 @@ function machExport(how, btn) {
   } else {
     try {
       const a2 = document.createElement("a");
-      a2.href = URL.createObjectURL(new Blob([fmt === "csv" ? "﻿" + txt : txt], {type: fmt === "csv" ? "text/csv;charset=utf-8" : "text/markdown;charset=utf-8"}));
-      a2.download = Report.fileName(name, fmt); document.body.append(a2); a2.click(); a2.remove(); setTimeout(() => URL.revokeObjectURL(a2.href), 4000);
+      // BOM solo en el CSV descargado, para que Excel lea bien las tildes
+      a2.href = URL.createObjectURL(new Blob([isCsv ? "\ufeff" + txt : txt], {type: isCsv ? "text/csv;charset=utf-8" : "text/markdown;charset=utf-8"}));
+      a2.download = Report.fileName(name, isCsv ? "csv" : "md", fmt === "csvm" ? "materiales" : "maquinas"); document.body.append(a2); a2.click(); a2.remove(); setTimeout(() => URL.revokeObjectURL(a2.href), 4000);
       // dentro de un marco (p. ej. una web que lo incrusta) el navegador puede bloquear la descarga sin avisar
       say(window.self !== window.top ? "Si no baja, cópialo del cuadro" : "Descargado");
     } catch (e) { say("Cópialo del cuadro"); }
@@ -377,6 +406,14 @@ document.addEventListener("change", e => {
   else if (t.id === "cfgfile" && t.files[0]) t.files[0].text().then(x => importState(x));
 });
 document.addEventListener("input", e => { if (e.target.id === "q") filterProd(); if (e.target.id === "aq") renderAlts(); });
+// enlaces internos: desplazamiento con JS (el ancla #id no siempre navega, p. ej. en copias data: o dentro de un marco)
+document.addEventListener("click", e => {
+  const a = e.target.closest("a[data-go]"); if (!a) return;
+  const h = $(a.dataset.go); if (!h) return;
+  // la barra de cifras es fija en pantallas anchas y puede ocupar varias filas: se deja el título justo debajo
+  const k = document.querySelector(".kbar"), off = (k && getComputedStyle(k).position === "sticky" ? k.offsetHeight : 0) + 8;
+  e.preventDefault(); window.scrollTo(0, h.getBoundingClientRect().top + window.scrollY - off); h.focus({preventScroll: true});
+});
 document.addEventListener("click", e => {
   const t = e.target.closest("button"); if (!t) return;
   const a = t.dataset.act, plan = P();
@@ -404,6 +441,7 @@ document.addEventListener("click", e => {
   else if (t.id === "undo") undo();
   else if (a === "mtgl") machToggle([t.dataset.k], t.getAttribute("aria-expanded") !== "true");
   else if (t.id === "mOpen" || t.id === "mClose") machToggle([...$("mach").querySelectorAll("button.tgl")].map(b => b.dataset.k), t.id === "mOpen");
+  else if (t.dataset.cs) { costSort = t.dataset.cs; for (const b of $("costSort").querySelectorAll("button")) b.setAttribute("aria-pressed", b.dataset.cs === costSort); renderCostMat(); }
   else if (t.id === "mCopy" || t.id === "mDl") machExport(t.id === "mCopy" ? "copy" : "dl", t);
   else if (t.id === "limMap") set(() => { for (const [k, v] of Object.entries(DB.world)) S.cfg.limits[k] = v; });
   else if (t.id === "limNone") set(() => { S.cfg.limits = {}; });

@@ -140,15 +140,16 @@ const cohP = ["Desc_NitrogenGas_C", "Desc_LiquidOil_C"].every(i => { const st = 
 ok(!rP.error && rP.pressIter <= 12 && cohP && closes(AP), `Pressurizers: nítrico con «mínima potencia» converge (${rP.pressIter} vuelta(s)) y cuadra`);
 
 // ---------- desglose de máquinas (src/report.js)
+let csvParse, numCol;
 {
   const Rep = require("../src/report.js");
   const cfgN = Object.assign({}, cfg, {ext: {Desc_NitrogenGas_C: {wells: 2}}});
   const cases = [["fase 5 optimizada con energía y pozos", cfgN, E.solveOpt(cfgN, plan({mode: "opt", energy: "gen"}), f5)],
     ["fase 5 manual con energía y pozos", cfgN, E.solveManual(cfgN, plan({energy: "gen"}), f5)], ["fase 5 manual sin energía", cfg, E.solveManual(cfg, plan(), f5)]];
-  const csvParse = s => s.replace(/\r\n$/, "").split("\r\n").map(line => { const f = []; let cur = "", q = false;
+  csvParse = s => s.replace(/\r\n$/, "").split("\r\n").map(line => { const f = []; let cur = "", q = false;
     for (let i = 0; i < line.length; i++) { const c = line[i]; if (q) { if (c === '"' && line[i + 1] === '"') { cur += '"'; i++; } else if (c === '"') q = false; else cur += c; } else if (c === '"') q = true; else if (c === ";") { f.push(cur); cur = ""; } else cur += c; }
     f.push(cur); return f; });
-  const numCol = v => v === "" || /^-?\d+(,\d+)?$/.test(v);
+  numCol = v => v === "" || /^-?\d+(,\d+)?$/.test(v);
   for (const [lbl, c, res] of cases) {
     const A = E.analyze(c, res), rep = Rep.breakdown(A, {db, lang: "es", cfg: c, engine: E});
     const B = rep.sections.flatMap(s => s.buildings), L = B.flatMap(b => b.lines);
@@ -169,7 +170,7 @@ ok(!rP.error && rP.pressIter <= 12 && cohP && closes(AP), `Pressurizers: nítric
       `desglose (${lbl}): secciones ${rep.sections.map(s => s.title).join(", ")}; edificios y líneas ordenados por unidades`);
     // 27) CSV: cabecera, una fila por línea, 13 columnas, números con coma decimal y sin BOM (el BOM solo va en la descarga)
     const csv = Rep.csv(rep), rows = csvParse(csv);
-    ok(csv[0] !== "﻿" && rows[0].join() === Rep.CSV_COLS.join() && rows.length === L.length + 1 && rows.every(r => r.length === 13) && rows.slice(1).every(r => [5, 7, 8, 9, 10, 11, 12].every(k => numCol(r[k]))),
+    ok(csv[0] !== "\ufeff" && rows[0].join() === Rep.CSV_COLS.join() && rows.length === L.length + 1 && rows.every(r => r.length === 13) && rows.slice(1).every(r => [5, 7, 8, 9, 10, 11, 12].every(k => numCol(r[k]))),
       `CSV (${lbl}): ${rows.length - 1} filas de 13 columnas en formato español`);
     // 28) Markdown: una sección por grupo, una tabla por edificio, 8 celdas por fila
     const md = Rep.markdown(rep, "Fase 5"), mdRows = md.split("\n").filter(x => x.startsWith("| ") && !x.startsWith("| Sección") && !x.startsWith("| Producto"));
@@ -192,6 +193,65 @@ ok(!rP.error && rP.pressIter <= 12 && cohP && closes(AP), `Pressurizers: nítric
     "escapes de Markdown (| y \\) y CSV (; comillas y saltos de línea)");
   ok(Rep.fileName('  Fase 5: <hierro>/"acero"?*|\\  ', "md") === "Fase 5 hierroacero_maquinas.md" && Rep.fileName(" :/*?  ", "csv") === "fabrica_maquinas.csv" && Rep.fileName("", "md") === "fabrica_maquinas.md" && Rep.fileName(null, "csv") === "fabrica_maquinas.csv",
     "nombre de archivo sin / \\ : * ? \" < > | ni espacios sobrantes; vacío -> «fabrica»");
+}
+
+// ---------- coste de construcción (src/report.js + db.buildCosts)
+{
+  const Rep = require("../src/report.js"), BC = db.buildCosts, X = db.extractors;
+  // 32) datos: una receta de la Build Gun por edificio que usa el planificador
+  const classes = [...Object.keys(db.buildings), ...Object.values(X.miner.tiers).map(t => t.id), X.water.id, X.oil.id, X.well.id, X.well.pressurizerId];
+  const same = (a, b) => JSON.stringify(Object.entries(a || {}).sort()) === JSON.stringify(Object.entries(b).sort());
+  ok(classes.length === 22 && classes.every(c => BC[c] && Object.keys(BC[c]).length && Object.keys(BC[c]).every(i => db.items[i] && Number.isInteger(BC[c][i])))
+    && same(BC.Build_ConstructorMk1_C, {Desc_IronPlateReinforced_C: 2, Desc_Cable_C: 8}) && BC.Build_MinerMk3_C.BP_ItemDescriptorPortableMiner_C === 3
+    && same(BC.Build_FrackingSmasher_C, {Desc_ModularFrameLightweight_C: 10, Desc_ModularFrameHeavy_C: 25, Desc_Motor_C: 50, Desc_AluminumPlate_C: 50, Desc_Rubber_C: 100}),
+    "costes de construcción de los 22 edificios (Constructor, Miner Mk.3, Pressurizer comprobados)");
+  // 33) Taladro portátil: su receta estándar es del Equipment Workshop (no entra en el planificador); la alternativa de la Ensambladora sí
+  const pm = "BP_ItemDescriptorPortableMiner_C", pmR = db.recipes.filter(r => r.out[pm]);
+  ok(db.items[pm].workshop === true && !db.recipes.some(r => r.id === "Recipe_PortableMiner_C") && pmR.length === 1 && pmR[0].id === "Recipe_Alternate_AutomatedMiner_C" && pmR[0].building === "Build_AssemblerMk1_C" && pmR[0].alt
+    && Object.keys(db.items).filter(i => db.items[i].workshop).join() === pm,
+    "Taladro portátil: marcado como del Equipment Workshop; en el planificador solo su alternativa de la Ensambladora");
+  // 34) unidades enteras: cada fila se redondea hacia arriba, también con reloj reducido
+  const frac = (rate, clock) => { const res = E.solveManual(cfg, plan({rc: {Recipe_IronPlate_C: {clock}}}), [{item: "Desc_IronPlate_C", rate}]), A = E.analyze(cfg, res);
+    const rep = Rep.breakdown(A, {db, lang: "es", cfg, engine: E}), c = Rep.cost(rep, {db, lang: "es"}), row = A.rows.find(r => r.p.id === "Recipe_IronPlate_C");
+    const b = c.buildings.find(x => x.cls === "Build_ConstructorMk1_C"); return {x: row.x, build: row.build, units: b.units, rip: b.total.find(t => t.item === "Desc_IronPlateReinforced_C").qty, cable: b.total.find(t => t.item === "Desc_Cable_C").qty, A, c}; };
+  const f1 = frac(15, 0.5), f2 = frac(10, 0.5), f3 = frac(10, 1);
+  ok(near(f1.x, 1.5) && f1.build === 2 && f1.units === 2 && f1.rip === 4 && f1.cable === 16 && near(f2.x, 1) && f2.units === 1 && near(f3.x, 0.5) && f3.units === 1 && f3.rip === 2
+    && [f1, f2, f3].every(f => f.A.rows.every(r => !r.build || r.build === Math.ceil(r.x - 1e-6))),
+    "unidades enteras: 1,5 Constructors al 50 % → 2 (4 planchas reforzadas, 16 cables); 0,5 → 1; 1,0 exacto → 1");
+  // 35) coherencia: materiales = suma por edificio = unidades × coste unitario; puntos y %; especiales = desglose
+  const cfgN = Object.assign({}, cfg, {ext: {Desc_NitrogenGas_C: {wells: 2}}});
+  const sloopP = plan({energy: "gen", rc: {Recipe_IronPlateReinforced_C: {clock: 2.5, sloops: 1}}});
+  for (const [lbl, c0, res] of [["fase 5 optimizada con energía y pozos", cfgN, E.solveOpt(cfgN, plan({mode: "opt", energy: "gen"}), f5)],
+    ["fase 5 manual con overclock y Somersloops", cfgN, E.solveManual(cfgN, sloopP, f5)]]) {
+    const rep = Rep.breakdown(E.analyze(c0, res), {db, lang: "es", cfg: c0, engine: E}), c = Rep.cost(rep, {db, lang: "es"});
+    const sum = {}; for (const b of c.buildings) for (const t of b.total) sum[t.item] = (sum[t.item] || 0) + t.qty;
+    const units = rep.sections.flatMap(s => s.buildings).reduce((a, b) => a + b.units, 0);
+    ok(!c.missing.length && c.buildings.length === rep.sections.flatMap(s => s.buildings).length && c.buildings.reduce((a, b) => a + b.units, 0) === units
+      && c.buildings.every(b => b.unit.every((u, k) => b.total[k].item === u.item && b.total[k].qty === u.qty * b.units))
+      && c.materials.length === Object.keys(sum).length && c.materials.every(m => m.qty === sum[m.item] && near(m.points, m.qty * db.items[m.item].sink))
+      && near(c.points, c.materials.reduce((a, m) => a + m.points, 0)) && near(c.buildings.reduce((a, b) => a + b.pct, 0), 100, 1e-9)
+      && c.specials[0].qty === rep.total.shards && c.specials[1].qty === rep.total.sloops,
+      `coste (${lbl}): ${c.buildings.length} tipos de edificio, ${c.materials.length} materiales; suma, puntos, % y especiales (${rep.total.shards} fragmentos, ${rep.total.sloops} Somersloops) cuadran`);
+    if (lbl.includes("Somersloops")) ok(rep.total.shards > 0 && rep.total.sloops > 0 && c.specials.map(x => x.name).join() === [db.specials.shard.es, db.specials.sloop.es].join(), "materiales especiales con overclock y Somersloops");
+    // 36) exportación: capítulo de Markdown y CSV de materiales
+    const md = Rep.markdown(rep, "Fase 5", c), ch = md.slice(md.indexOf("## Coste de construcción"));
+    const matRows = ch.split("### Por tipo de edificio")[0].split("\n").filter(x => x.startsWith("| ") && !x.startsWith("| Material") && !x.startsWith("| **Total"));
+    ok(md.includes("\n## Coste de construcción de la fábrica «Fase 5»\n") && [Rep.NOTE.units, Rep.NOTE.points, Rep.NOTE.specials, Rep.NOTE.excluded].every(n => ch.includes(n))
+      && matRows.length === c.materials.length && ch.includes("| Taladro portátil¹ |") && ch.includes("¹ Taladro portátil: se fabrica en el Taller de equipamiento"),
+      `Markdown con el coste (${lbl}): capítulo de la fábrica, ${matRows.length} materiales, notas y marca del Equipment Workshop`);
+    const rows = csvParse(Rep.costCsv(c, "Fase 5"));
+    ok(rows[0].join() === Rep.COST_COLS.join() && rows.length === 1 + c.buildings.reduce((a, b) => a + b.unit.length, 0) + 2 && rows.every(r => r.length === 9) && rows.slice(1).every(r => r[0] === "Fase 5")
+      && rows.slice(1).every(r => [3, 5, 6, 7].every(k => numCol(r[k]))) && rows.filter(r => r[4] === "Taladro portátil").every(r => r[8].startsWith("se fabrica en el Taller de equipamiento"))
+      && rows.slice(-2).every(r => r[1] === "Especiales"),
+      `CSV de materiales (${lbl}): ${rows.length - 1} filas de 9 columnas con la fábrica, observación del Workshop y especiales`);
+  }
+  // 37) orden de materiales y nombre de archivo
+  const cs = Rep.cost(Rep.breakdown(E.analyze(cfg, E.solveManual(cfg, plan(), f5)), {db, lang: "es", cfg, engine: E}), {db, lang: "es"});
+  const byP = Rep.sortMaterials(cs.materials, "points"), byQ = Rep.sortMaterials(cs.materials, "qty");
+  ok(byP.every((m, i) => !i || byP[i - 1].points >= m.points) && byQ.every((m, i) => !i || byQ[i - 1].qty >= m.qty) && byP[0].item !== byQ[0].item
+    && Rep.pctTxt(0.01) === "< 0,1 %" && Rep.pctTxt(0) === "0 %" && Rep.pctTxt(27.34) === "27,3 %"
+    && Rep.fileName("Fase 5: x", "csv", "materiales") === "Fase 5 x_materiales.csv" && Rep.fileName("", "csv", "materiales") === "fabrica_materiales.csv",
+    `orden por cantidad (${cs.materials.length ? byQ[0].name : "?"}) o por puntos (${cs.materials.length ? byP[0].name : "?"}); % «< 0,1 %» para edificios baratos; archivo <fábrica>_materiales.csv`);
 }
 
 // ---------- HTML generado
@@ -241,8 +301,11 @@ ok(!rP.error && rP.pressIter <= 12 && cohP && closes(AP), `Pressurizers: nítric
     plans: [{name: "m", targets: f5, sel: {}, rc: {}, mode: "manual", objective: "weighted", ban: {}, energy: "gen", gridMW: 0}]});
   const b3 = boot(savedM), mh = String(b3.els.mach && b3.els.mach.innerHTML);
   ok(!b3.err && (mh.match(/class="mb"/g) || []).length > 5 && (mh.match(/class="ml"[^>]* hidden/g) || []).length === (mh.match(/class="ml"/g) || []).length
-    && mh.includes(db.extractors.well.pressurizerName.es) && mh.includes("→ Energía") && mh.includes('class="tot"'),
-    "la pestaña Máquinas se pinta: edificios plegados con sus líneas, Pressurizers, generadores y total" + (b3.err ? ` — ${b3.err.name}: ${b3.err.message}` : ""));
+    && mh.includes(db.extractors.well.pressurizerName.es) && mh.includes("→ Energía") && mh.includes('class="tot"')
+    && String(b3.els.cmat && b3.els.cmat.innerHTML).includes("Puntos del Sink") && String(b3.els.cbld && b3.els.cbld.innerHTML).includes("Coste unitario")
+    && String(b3.els.cspec && b3.els.cspec.innerHTML).includes(db.specials.sloop.es) && String(b3.els.costName && b3.els.costName.textContent) === "m"
+    && String(b3.els.cnotes && b3.els.cnotes.innerHTML).includes("cimientos"),
+    "la pestaña Máquinas se pinta: edificios plegados con sus líneas, Pressurizers, generadores, total y coste de construcción" + (b3.err ? ` — ${b3.err.name}: ${b3.err.message}` : ""));
 }
 console.log(fails ? `\n${fails} fallo(s)` : "\nTodo correcto");
 process.exitCode = fails ? 1 : 0;

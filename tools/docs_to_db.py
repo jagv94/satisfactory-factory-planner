@@ -3,7 +3,8 @@
 Uso:  python docs_to_db.py "<Satisfactory>/CommunityResources/Docs" ../data/satisfactory_db.json
 Lee en-US.json y es-ES.json (UTF-16). Solo incluye recetas de máquinas de producción
 (sin edificios, equipo ni FICSMAS) y añade cada generador con cada combustible como receta
-(combustible + agua -> Power_MW + residuo).
+(combustible + agua -> Power_MW + residuo). También guarda el coste de construcción (receta de la Build Gun)
+de cada edificio que usa el planificador (buildCosts) y los nombres de Power Shard, Somersloop y Equipment Workshop.
 """
 import json, re, sys, os
 
@@ -148,6 +149,30 @@ extractors = {
            "en": "Resource Well Extractor", "es": es_name.get("Build_FrackingExtractor_C"), "pressurizer": f(press["mPowerConsumption"]),
            "pressurizerExp": f(press.get("mPowerConsumptionExponent"), 1.321929), "pressurizerName": {"en": press["mDisplayName"], "es": es_name.get(press["ClassName"], press["mDisplayName"])}},
 }
+for k, cls in (("water", "Build_WaterPump_C"), ("oil", "Build_OilPump_C"), ("well", "Build_FrackingExtractor_C")): extractors[k]["id"] = cls
+extractors["well"]["pressurizerId"] = press["ClassName"]
+
+# ---------- coste de construcción: receta de la Build Gun de cada edificio que usa el planificador (Build_X_C <- Desc_X_C)
+BUILD_CLASSES = list(buildings) + [t["id"] for t in extractors["miner"]["tiers"].values()] + [extractors[k]["id"] for k in ("water", "oil", "well")] + [press["ClassName"]]
+build_costs, workshop_made = {}, set()
+for c in EN["FGRecipe"]:
+    made = [cls_of(p) for p in re.findall(r'"([^"]+)"', c.get("mProducedIn") or "")]
+    if "BP_WorkshopComponent_C" in made: workshop_made |= {it for it, _ in parse_amounts(c.get("mProduct"))}
+    if "BP_BuildGun_C" not in made: continue
+    for it, _ in parse_amounts(c.get("mProduct")):
+        b = "Build_" + it[5:] if it.startswith("Desc_") else None
+        if b in BUILD_CLASSES: build_costs[b] = {i: int(a) for i, a in parse_amounts(c["mIngredients"])}
+missing = [b for b in BUILD_CLASSES if b not in build_costs]
+if missing: sys.exit(f"Sin coste de construcción: {missing}")
+cost_items = {i for cost in build_costs.values() for i in cost}
+# objetos especiales: Power Shards y Somersloops (se colocan en las máquinas; el Somersloop no es una pieza de receta)
+shard_c = [c for c in EN["FGPowerShardDescriptor"] if c["ClassName"] == "Desc_CrystalShard_C"][0]
+sloop_c = [c for c in EN["FGPowerShardDescriptor"] if c["ClassName"] == "Desc_WAT1_C"][0]
+workshop_c = [c for lst in EN.values() for c in lst if c["ClassName"] == "Build_Workshop_C"] or [{"ClassName": "Build_Workshop_C", "mDisplayName": "Equipment Workshop"}]
+specials = {"shard": {"id": shard_c["ClassName"], "en": shard_c["mDisplayName"], "es": es_name.get(shard_c["ClassName"], shard_c["mDisplayName"])},
+            "sloop": {"id": sloop_c["ClassName"], "en": sloop_c["mDisplayName"], "es": es_name.get(sloop_c["ClassName"], sloop_c["mDisplayName"])},
+            "workshop": {"id": workshop_c[0]["ClassName"], "en": workshop_c[0]["mDisplayName"], "es": es_name.get(workshop_c[0]["ClassName"], workshop_c[0]["mDisplayName"])}}
+
 purity = {"Impure": 0.5, "Normal": 1.0, "Pure": 2.0}
 belts = {f"Mk.{n}": f([c for c in EN["FGBuildableConveyorBelt"] if c["ClassName"] == f"Build_ConveyorBeltMk{n}_C"][0]["mSpeed"]) / 2 for n in range(1, 7)}
 pipes = {"Mk.1": f([c for c in EN["FGBuildablePipeline"] if c["ClassName"] == "Build_Pipeline_C"][0]["mFlowLimit"]) * 60,
@@ -159,8 +184,10 @@ world = {"Desc_OreIron_C": 92100, "Desc_OreGold_C": 15000, "Desc_OreCopper_C": 3
 # objetos recolectados a mano (sin receta ni extractor)
 prim = {list(r["out"])[0] for r in recipes}
 manual = sorted(k for k in used if not items[k]["raw"] and k not in prim and not any(k in r["out"] for r in recipes) and not items[k].get("synthetic"))
-items = {k: v for k, v in items.items() if k in used or v["raw"]}
+items = {k: v for k, v in items.items() if k in used or v["raw"] or k in cost_items}
 for k in manual: items[k]["manual"] = True
+# materiales de construcción cuya receta estándar es del Equipment Workshop (p. ej. el Taladro portátil de los Miner)
+for k in cost_items & workshop_made: items[k]["workshop"] = True
 
 # colores de materias primas (paleta propia, inspirada en el juego)
 RAWCOL = {"Desc_OreIron_C": "#b9573f", "Desc_OreCopper_C": "#d9783a", "Desc_Stone_C": "#cbbfa7", "Desc_Coal_C": "#3d3d42",
@@ -173,7 +200,7 @@ for k, v in RAWCOL.items():
 db = {"meta": {"game": "Satisfactory", "source": "CommunityResources/Docs (en-US, es-ES)", "generated": __import__("datetime").date.today().isoformat(),
                "docsMtime": os.path.getmtime(os.path.join(DOCS, "en-US.json")), "units": "por minuto; fluidos en m³/min"},
       "items": items, "recipes": recipes, "buildings": buildings, "extractors": extractors, "purity": purity,
-      "belts": belts, "pipes": pipes, "world": world,
+      "belts": belts, "pipes": pipes, "world": world, "buildCosts": build_costs, "specials": specials,
       "presets": {
         "Fase 5 del Space Elevator": ["Desc_SpaceElevatorPart_9_C", "Desc_SpaceElevatorPart_10_C", "Desc_SpaceElevatorPart_11_C", "Desc_SpaceElevatorPart_12_C"],
       }}

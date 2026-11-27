@@ -106,6 +106,15 @@ tr.imp td:first-child{box-shadow:inset 4px 0 var(--mute)}
 .m{color:var(--mute);font-size:13px}
 .mbar{margin-bottom:10px}
 .mexp{margin-left:auto}
+.cost{margin-top:18px;padding-top:6px;border-top:2px solid var(--ink)}
+#costH:focus{outline:none}
+.cost h4{font:700 16px/1.2 "Barlow Condensed",Barlow,sans-serif;margin:14px 0 4px}
+.cbar{align-items:center;margin:6px 0 2px}
+.cbar .seg button{flex:none;min-height:34px;font-size:14px;padding:4px 12px;white-space:nowrap}
+.cost .obj{display:flex;gap:7px;align-items:center;min-width:11em}
+.cost .ls div{white-space:nowrap;font-size:13px}
+.cost sup{color:var(--orT);font-weight:700}
+#cnotes p{margin:4px 0}
 .mach .tgl{display:flex;align-items:center;gap:6px;width:100%;min-height:34px;padding:2px 4px 2px 0;background:none;border:0;border-radius:0;color:var(--ink);font:700 15px/1.2 Barlow,sans-serif;text-align:left}
 .mach .tgl::before{content:"▸";flex:none;width:1em;color:var(--orT)}
 .mach .tgl[aria-expanded=true]::before{content:"▾"}
