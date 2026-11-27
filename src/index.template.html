@@ -97,12 +97,22 @@
     </div>
     <div id="v-mach" hidden>
       <div class="row mbar"><button id="mOpen" type="button">Desplegar todo</button><button id="mClose" type="button">Plegar todo</button>
-        <div class="row mexp"><label>Formato<select id="mFmt"><option value="md">Markdown</option><option value="csv">CSV</option></select></label>
+        <div class="row mexp"><label>Formato<select id="mFmt"><option value="md">Markdown (máquinas y coste)</option><option value="csv">CSV: máquinas</option><option value="csvm">CSV: materiales</option></select></label>
           <button id="mCopy" type="button">Copiar</button><button id="mDl" type="button">Descargar</button></div></div>
+      <p class="hint top0" id="costSum"></p>
       <div class="scroll"><table id="mach" class="mach"></table></div>
       <p class="hint" id="machNote"></p>
       <p class="hint">Despliega un edificio para ver para qué se usa: una línea por receta (si el optimizador mezcla dos recetas para el mismo producto, salen las dos). En los extractores, la pureza es la configurada en Extracción para ese recurso, no un recuento de nodos reales. Con varias líneas, el total redondea cada línea hacia arriba.</p>
       <textarea id="mOut" hidden readonly aria-label="Desglose exportado"></textarea>
+      <section class="cost" aria-labelledby="costH">
+        <h3 id="costH" tabindex="-1"><span>Coste de construcción · fábrica «<span id="costName"></span>»</span></h3>
+        <p class="hint top0" id="costScope"></p>
+        <div class="row cbar"><span class="m">Ordenar materiales por</span><div class="seg" id="costSort"><button type="button" data-cs="qty">Cantidad</button><button type="button" data-cs="points">Puntos del Sink</button></div></div>
+        <h4>Materiales totales</h4><div class="scroll"><table id="cmat"></table></div>
+        <h4>Por tipo de edificio</h4><div class="scroll"><table id="cbld"></table></div>
+        <h4>Materiales especiales</h4><div class="scroll"><table id="cspec"></table></div>
+        <div class="hint" id="cnotes"></div>
+      </section>
     </div>
     <div id="v-energy" hidden>
       <div class="esum" id="esum"></div>

@@ -37,6 +37,11 @@ Herramienta para calcular fábricas de Satisfactory: qué recetas usar, cuántas
    - En los extractores, la pureza que aparece es la configurada en *Extracción* para ese recurso, no un recuento de nodos reales.
    - *Copiar* o *Descargar* exporta el desglose como lista de construcción, en **Markdown** (una tabla por edificio) o en **CSV**. El texto queda también en el cuadro de debajo, por si el navegador bloquea el portapapeles o la descarga.
    - El **CSV usa formato español**: punto y coma como separador y coma decimal, pensado para abrirlo en Excel o LibreOffice en español. Lleva una fila por receta, sin filas de total, para poder filtrar y sumar.
+   - **Coste de construcción** (debajo del desglose, solo de la fábrica activa): materiales para construir todas las máquinas, extractores, generadores y Pressurizers, con el coste de cada edificio en los Docs del juego. Muestra el total de materiales (ordenable por cantidad o por puntos del AWESOME Sink), el desglose por tipo de edificio (unidades × coste unitario, con su % del total) y los Power Shards y Somersloops colocados. Cuenta edificios enteros: cada línea se redondea hacia arriba.
+     - Los puntos del Sink sirven para ver qué parte sale más cara, pero miden la complejidad de la pieza y crecen mucho con el tier; no equivalen al mineral necesario.
+     - El Taladro portátil (lo piden los Miner) se fabrica en el Equipment Workshop, o en la Ensambladora con la alternativa *Taladro automatizado*.
+     - No incluye cintas, tuberías, elevadores, divisores, bombas, postes y cables, cimientos ni paredes (dependen del diseño físico), ni almacenes, el AWESOME Sink o transporte.
+     - Se exporta dentro del Markdown y como *CSV: materiales* (`<fábrica>_materiales.csv`, mismo formato español).
 8. **Diagrama**: flujo de materias primas a objetivos. **Árbol**: desglose recursivo. **Excedentes**: lo que sobra.
 
 Atajo: `Ctrl+Z` deshace (fuera de los campos de texto).
