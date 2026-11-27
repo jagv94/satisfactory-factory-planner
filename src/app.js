@@ -380,7 +380,7 @@ const advKey = () => adv.mode + (adv.mode === "cand" ? ":" + adv.scope + (adv.sc
 const CRIT = {weighted: "mínimo de recursos (ponderado por escasez)", power: "mínima potencia", machines: "mínimo de máquinas"};
 const fold = t => String(t).normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
 const altProd = r => Object.keys(r.out)[0];
-const ADV_ST = {mejora: "Mejora", empeora: "Empeora", error: "Sin solución", viable: "Hace posible el plan", importa: "Importa", mejorsin: "Mejor sin ella",
+const ADV_ST = {mejora: "Mejora", empeora: "Empeora", error: "Sin solución", sinlimite: "Sin límite", viable: "Hace posible el plan", importa: "Importa", mejorsin: "Mejor sin ella",
   prescindible: "Prescindible", imprescindible: "Imprescindible: sin ella no hay solución"};
 const ADV_WHY = {nolausa: "no la usaría", singanancia: "la usaría, pero sin ganancia", sinsol: "sigue sin solución", noentra: "no entra en esta fábrica", excluida: "excluida en esta fábrica", sinuso: "no se usa"};
 function advState(r) {
@@ -444,7 +444,8 @@ function renderAdvisor() {
   if (!show || adv.running) { $("advOut").innerHTML = ""; return; }
   const out = [];
   if (stale) out.push(`<p class="advst">Has cambiado la fábrica o los desbloqueos después de evaluar: estos resultados son de antes. Pulsa «Volver a evaluar».</p>`);
-  if (j.base.error) out.push(`<p class="advst">${j.blocked ? "Ahora la fábrica no tiene solución, así que no hay nada que empeorar al bloquear: " : "Ahora la fábrica no tiene solución; se marcan las alternativas que la hacen posible. "}${esc(ERR[j.base.error] || j.base.error)}</p>`);
+  if (j.base.error) out.push(`<p class="advst">${j.base.error === "unbounded" ? "Ahora la escala de la fábrica no tiene techo, así que no hay con qué comparar. "
+    : j.blocked ? "Ahora la fábrica no tiene solución, así que no hay nada que empeorar al bloquear: " : "Ahora la fábrica no tiene solución; se marcan las alternativas que la hacen posible. "}${esc(ERR[j.base.error] || j.base.error)}</p>`);
   const g = Advisor.groups(j);
   // diferencia con signo; verde si mejora (menos es mejor, salvo up = más es mejor)
   const sg = (v, d, u, up) => { if (v == null || !isFinite(v)) return "–"; if (Math.abs(v) < 5 * Math.pow(10, -d - 1)) return `<span class="m">0</span>`; return `<span class="${(v < 0) !== !!up ? "good" : "bad"}">${v > 0 ? "+" : "−"}${nf(Math.abs(v), d)}${u || ""}</span>`; };
@@ -452,7 +453,7 @@ function renderAdvisor() {
   const critCell = r => r.rel == null ? "–" : maxi ? sg(-r.rel * 100, 2, " %", true) : sg(r.rel * 100, 2, " %");
   const row = r => { const R0 = Engine.R[r.id], p = altProd(R0), d = r.delta || {}, on = !L[r.id];
     return `<tr><td><div class="obj">${ic(p)}<div><b>${esc(R0[S.lang])}</b><small>${esc(nm(p))} · ${esc(DB.buildings[R0.building][S.lang])}</small></div></div></td>
-      <td class="st st-${r.state}">${esc(advState(r))}</td><td class="n">${critCell(r)}</td><td class="n">${sg(d.score, Math.abs(d.score || 0) < 0.1 ? 3 : 2)}</td><td class="n">${sg(d.mw, 1)}</td><td class="n">${sg(d.mach, 0)}</td><td class="n">${sg(d.points, 0)}</td>
+      <td class="st st-${r.state}">${esc(advState(r))}${r.state === "sinlimite" ? `<small>${cand ? "Con" : "Sin"} esta alternativa la escala no tiene techo: algún recurso no está limitado.</small>` : ""}</td><td class="n">${critCell(r)}</td><td class="n">${sg(d.score, Math.abs(d.score || 0) < 0.1 ? 3 : 2)}</td><td class="n">${sg(d.mw, 1)}</td><td class="n">${sg(d.mach, 0)}</td><td class="n">${sg(d.points, 0)}</td>
       <td><button type="button" class="x" data-act="advtgl" data-id="${r.id}" aria-label="${on ? "Bloquear" : "Desbloquear"} ${esc(R0[S.lang])}">${on ? "Bloquear" : "Desbloquear"}</button></td></tr>`; };
   const head = `<thead><tr><th>Alternativa</th><th>Estado</th><th class="n">${maxi ? "Escala" : "Criterio"}</th><th class="n">Recursos<small>Δ % del mapa</small></th><th class="n">Energía<small>Δ MW</small></th><th class="n">Máquinas<small>Δ</small></th><th class="n">Coste<small>Δ puntos</small></th><th></th></tr></thead>`;
   const byName = (a, b) => Engine.R[a.id][S.lang].localeCompare(Engine.R[b.id][S.lang]);

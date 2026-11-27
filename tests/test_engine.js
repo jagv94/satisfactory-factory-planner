@@ -346,6 +346,25 @@ let csvParse, numCol;
   const cImp = C(lockAll(), {limits: {Desc_OreIron_C: 50}}), pImp = P(plates, {ban: noConv}), jv = Adv.run(Adv.prepare(o, cImp, pImp, {mode: "cand"})), jb = Adv.prepare(o, cImp, pImp, {mode: "act"});
   ok(jv.base.error === "infeasible" && rowOf(jv, PURE).state === "viable" && Adv.groups(jv).main[0].state === "viable" && jb.blocked && !jb.queue.length,
     "asesor: si la fábrica no tiene solución, marca las candidatas que la hacen posible; las activas no se evalúan");
+  // 51) Converter: maximizar con solo el hierro limitado no tiene techo (el Converter hace mineral de hierro con caliza, que no
+  // está limitada). Sus recetas no son alternativas, así que la base ya no tiene techo: no hay con qué comparar y no se evalúa nada
+  const cIron = C(lockAll(), {limits: {Desc_OreIron_C: 480}}), pIron = P(plates, {maximize: true});
+  const ju = Adv.prepare(o, cIron, pIron, {mode: "cand"}), jua = Adv.prepare(o, cIron, pIron, {mode: "act"});
+  ok(ju.base.error === "unbounded" && ju.blocked && jua.blocked && !ju.queue.length && ju.rows.every(r => r.state === "sinbase") && !Adv.groups(ju).main.length,
+    "asesor: con el Converter y solo el hierro limitado, la base ya no tiene techo al maximizar: no se evalúa ninguna (ni candidatas ni activas)");
+  // 52) «Sin límite» en una fila: Barras de hierro con solo el hierro limitado y sin la receta del Converter que hace mineral de hierro
+  // (la base sí tiene techo). «Barra de aluminio» hace barras sin hierro y la bauxita no está limitada: con ella, la escala no tiene techo
+  const AROD = "Recipe_Alternate_AluminumRod_C", banIronOre = Object.fromEntries(db.recipes.filter(r => db.buildings[r.building].en === "Converter" && r.out.Desc_OreIron_C).map(r => [r.id, true]));
+  const pRod = P([{item: "Desc_IronRod_C", rate: 60}], {maximize: true, ban: banIronOre}), jrod = Adv.run(Adv.prepare(o, cIron, pRod, {mode: "cand"})), rrod = rowOf(jrod, AROD);
+  ok(!jrod.base.error && jrod.base.res.scale > 1 && rrod.state === "sinlimite" && rrod.error === "unbounded" && rrod.rel == null && Adv.groups(jrod).main[0].state === "sinlimite"
+    && jrod.rows.filter(r => r.state === "sinlimite").length === 1 && rowOf(jrod, PURE).state === "mejora",
+    `asesor: una alternativa que deja la escala sin techo sale «Sin límite», arriba de la lista, no «Sin solución» (base ×${jrod.base.res.scale.toFixed(2)})`);
+  // 53) en Activas, igual: si al bloquear una el plan quedara sin techo, sale «Sin límite». Sin pozos no puede pasar (quitar una receta
+  // no quita techo), así que se simula con un motor que devuelve «unbounded» al bloquear Lingote de hierro puro
+  const oU = Object.assign({}, o, {engine: Object.assign({}, E, {solveOpt: (c, p) => c.locked && c.locked[PURE] ? {steps: [], error: "unbounded", scale: 1e6} : E.solveOpt(c, p)})});
+  const cP = C(lockAll()); delete cP.locked[PURE];
+  const jsu = Adv.run(Adv.prepare(oU, cP, P(plates), {mode: "act"})), rsu = rowOf(jsu, PURE);
+  ok(rsu.state === "sinlimite" && Adv.groups(jsu).main[0] === rsu, "asesor: en Activas, si al bloquear una el plan queda sin techo, sale «Sin límite» (caso simulado)");
 }
 
 // ---------- HTML generado
@@ -369,14 +388,15 @@ let csvParse, numCol;
     set(o, k, v) { o[k] = v; return true; }, apply: () => stub()}); };
   // saved: configuración guardada en localStorage (null = primera visita)
   const boot = saved => {
-    const els = {}, el = id => els[id] || (els[id] = stub({id, textContent: "", innerHTML: "", value: "", dataset: {}, hidden: false}));
-    const ctx = vm.createContext({console, Intl, setTimeout: () => 0, clearTimeout() {}, requestAnimationFrame: () => 0, CSS: {escape: s => s}, Image: function () {},
+    // L: escuchadores de document; T: llamadas a setTimeout (no se ejecutan solas: una prueba puede vaciarlas)
+    const els = {}, el = id => els[id] || (els[id] = stub({id, textContent: "", innerHTML: "", value: "", dataset: {}, hidden: false})), L = {}, T = [];
+    const ctx = vm.createContext({console, Intl, setTimeout: f => T.push(f), clearTimeout() {}, requestAnimationFrame: () => 0, CSS: {escape: s => s}, Image: function () {},
       localStorage: {getItem: () => saved, setItem() {}}, location: {protocol: "https:"}, matchMedia: () => ({matches: false, addEventListener() {}}), getComputedStyle: () => stub(),
       window: stub({scrollY: 0, scrollTo() {}, addEventListener() {}}),
-      document: stub({getElementById: id => id === "db" ? {textContent: dbM ? dbM[1] : "{}"} : el(id), querySelector: () => null, querySelectorAll: () => [], addEventListener() {}, activeElement: null, body: stub(), documentElement: stub()})});
+      document: stub({getElementById: id => id === "db" ? {textContent: dbM ? dbM[1] : "{}"} : el(id), querySelector: () => null, querySelectorAll: () => [], addEventListener: (t, f) => { (L[t] = L[t] || []).push(f); }, activeElement: null, body: stub(), documentElement: stub()})});
     let err = null;
     try { vm.runInContext(js, ctx, {filename: "Planificador.html"}); } catch (e) { err = e; }
-    return {els, ctx, err};
+    return {els, ctx, err, L, T};
   };
   const {els, ctx, err: bootErr} = boot(null);
   const sub = els.sub ? String(els.sub.textContent) : "";
@@ -400,7 +420,7 @@ let csvParse, numCol;
     && String(b3.els.cspec && b3.els.cspec.innerHTML).includes(db.specials.sloop.es) && String(b3.els.costName && b3.els.costName.textContent) === "m"
     && String(b3.els.cnotes && b3.els.cnotes.innerHTML).includes("cimientos"),
     "la pestaña Máquinas se pinta: edificios plegados con sus líneas, Pressurizers, generadores, total y coste de construcción" + (b3.err ? ` — ${b3.err.name}: ${b3.err.message}` : ""));
-  // 51) la pestaña Alternativas pinta el asesor: fábrica en el título y avisos fijos (cada una por separado, sin filtro por tier,
+  // 54) la pestaña Alternativas pinta el asesor: fábrica en el título y avisos fijos (cada una por separado, sin filtro por tier,
   // umbral del 0,01 %). Sin pozos afirma que desbloquear nunca empeora; con pozos, no. En Manual, avisa de que la base es el plan óptimo
   const savedA = (ext, mode) => JSON.stringify({v: 2, cur: 0, tab: "alts", cfg: {clock: 1, ext, locked: {}},
     plans: [{name: "a", targets: [{item: "Desc_IronPlate_C", rate: 60}], sel: {}, rc: {}, mode, objective: "weighted", ban: {}, energy: "off", gridMW: 0}]});
@@ -412,6 +432,20 @@ let csvParse, numCol;
     && n4.includes("nunca empeora") && !n4.includes("Tu fábrica está en Manual") && !n5.includes("nunca empeora") && n5.includes("Pressurizers") && n5.includes("Tu fábrica está en Manual")
     && String(b5.els.advCrit.textContent).includes("Manual"),
     "la pestaña Alternativas pinta el asesor con sus avisos (con pozos no afirma la monotonía; en Manual, base óptima)" + ((b4.err || b5.err) ? ` — ${(b4.err || b5.err).message}` : ""));
+  // 55) el panel pinta «Sin límite» con su nota (caso de la prueba 52) y, con la base sin techo, el aviso de que no hay con qué comparar
+  const banJ = JSON.stringify(Object.fromEntries(db.recipes.filter(r => db.buildings[r.building].en === "Converter" && r.out.Desc_OreIron_C).map(r => [r.id, true])));
+  const savedU = (item, ban) => JSON.stringify({v: 2, cur: 0, tab: "alts", cfg: {clock: 1, ext: {}, limits: {Desc_OreIron_C: 480}, locked: Object.fromEntries(db.recipes.filter(r => r.alt).map(r => [r.id, true]))},
+    plans: [{name: "u", targets: [{item, rate: 60}], sel: {}, rc: {}, mode: "opt", objective: "weighted", maximize: true, ban: JSON.parse(ban), energy: "off", gridMW: 0}]});
+  // pulsa «Evaluar» como la interfaz (clic en #advRun) y deja correr el cálculo por partes
+  const evalIn = b => { const btn = {id: "advRun", dataset: {}}, ev = {target: {closest: q => q === "button" ? btn : null}, preventDefault() {}};
+    for (const f of b.L.click || []) f(ev);
+    for (let k = 0; k < 500 && b.T.length; k++) b.T.shift()(); };
+  const b6 = boot(savedU("Desc_IronRod_C", banJ)), b7 = boot(savedU("Desc_IronPlate_C", "{}"));
+  let e67 = null; try { evalIn(b6); evalIn(b7); } catch (e) { e67 = e; }
+  const o6 = String(b6.els.advOut && b6.els.advOut.innerHTML), o7 = String(b7.els.advOut && b7.els.advOut.innerHTML);
+  ok(!e67 && !b6.err && !b7.err && o6.includes(">Sin límite<small>Con esta alternativa la escala no tiene techo: algún recurso no está limitado.</small>") && !o6.includes("Sin solución")
+    && o7.includes("no tiene techo, así que no hay con qué comparar") && !o7.includes("<table"),
+    "el panel pinta «Sin límite» con su nota y, con la base sin techo, avisa de que no hay con qué comparar" + (e67 ? ` — ${e67.message}` : ""));
 }
 console.log(fails ? `\n${fails} fallo(s)` : "\nTodo correcto");
 process.exitCode = fails ? 1 : 0;

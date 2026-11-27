@@ -43,7 +43,8 @@ const Advisor = (() => {
     const used = new Set(base.steps.filter(s => s.p.kind === "recipe").map(s => s.p.id));
     const job = {o, mode, cfg, plan, wells, rows: [], queue: [], done: 0, ms: 0, cancelled: false,
       base: {res: base, error: base.error, crit: base.error ? null : crit(base, plan), sum: base.error ? null : summary(o, cfg, base)}};
-    job.blocked = mode === "act" && !!base.error;   // sin plan base no hay nada que empeorar
+    // sin plan base no hay nada que empeorar; si la base ya no tiene techo (maximizar), desbloquear no le pone techo: nada que comparar
+    job.blocked = !!base.error && (mode === "act" || base.error === "unbounded");
     for (const id of pool) {
       const row = {id, used: used.has(id)}, enters = !ban[id] && Object.keys(E.R[id].out).some(k => reach.has(k));
       if (job.blocked) row.state = "sinbase";
@@ -61,6 +62,8 @@ const Advisor = (() => {
     const cfg2 = setUnlocked(clone(job.cfg), row.id, job.mode === "cand");
     const res = row.res = E.solveOpt(cfg2, plan);
     row.usedNew = res.steps.some(s => s.p.id === row.id);
+    // al maximizar, con (candidatas) o sin (activas) esta alternativa la escala no tiene techo: algún recurso no está limitado
+    if (res.error === "unbounded") { row.error = res.error; row.state = "sinlimite"; return; }
     if (res.error) {
       row.error = res.error;
       row.state = job.mode === "act" ? "imprescindible" : base.error ? "noaporta" : "error";
@@ -91,13 +94,14 @@ const Advisor = (() => {
   function run(job) { while (!step(job, Infinity)); return job; }
 
   // estados que se muestran arriba (el resto va al grupo plegado), en orden
-  const MAIN = {cand: ["viable", "mejora", "empeora", "error"], act: ["imprescindible", "importa", "mejorsin", "prescindible"]};
+  const MAIN = {cand: ["sinlimite", "viable", "mejora", "empeora", "error"], act: ["sinlimite", "imprescindible", "importa", "mejorsin", "prescindible"]};
   // filas evaluadas (o resueltas por atajo), ordenadas: primero las de más efecto
   function groups(job) {
     const ev = job.rows.filter(r => r.state && r.state !== "sinbase"), M = MAIN[job.mode];
-    // candidatas: de más a menos mejora; activas: de más a menos empeoramiento. «Hace posible» / «imprescindible» arriba, errores al final
+    // candidatas: de más a menos mejora; activas: de más a menos empeoramiento.
+    // «Sin límite» / «Hace posible» / «imprescindible» arriba, errores al final
     const key = r => job.mode === "cand" ? r.rel ?? 0 : -(r.rel ?? 0);
-    const pri = s => s === "viable" || s === "imprescindible" ? 0 : s === "error" ? 2 : 1;
+    const pri = s => s === "sinlimite" || s === "viable" || s === "imprescindible" ? 0 : s === "error" ? 2 : 1;
     const main = ev.filter(r => M.includes(r.state)).sort((a, b) => pri(a.state) - pri(b.state) || key(a) - key(b));
     const rest = ev.filter(r => !M.includes(r.state));
     return {main, rest, pending: job.rows.filter(r => !r.state).length};

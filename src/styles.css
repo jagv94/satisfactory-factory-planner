@@ -161,7 +161,8 @@ tr.imp td:first-child{box-shadow:inset 4px 0 var(--mute)}
 .advt .obj small{display:block;color:var(--mute);font-size:12.5px;white-space:normal}
 .advt .st{font-size:13.5px;min-width:7.5em}
 .st-mejora,.st-viable{color:var(--ok);font-weight:600}
-.st-importa,.st-imprescindible{color:var(--orT);font-weight:600}
+.st-importa,.st-imprescindible,.st-sinlimite{color:var(--orT);font-weight:600}
+.advt .st small{font-weight:400;white-space:normal;max-width:16em}
 .st-empeora,.st-mejorsin,.st-error{color:var(--bad);font-weight:600}
 .st-noaporta,.st-noentra,.st-nouso,.st-prescindible{color:var(--mute)}
 .good{color:var(--ok);font-weight:600}
