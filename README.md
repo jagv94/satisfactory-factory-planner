@@ -27,12 +27,22 @@ Herramienta para calcular fábricas de Satisfactory: qué recetas usar, cuántas
    - *Manual*: eliges una receta por objeto en la tabla de Producción.
    - *Optimizar*: el motor elige y mezcla recetas según un criterio (mínimo de recursos ponderado por escasez, mínima potencia o mínimo de máquinas).
    - Con *Maximizar* calcula cuánto puedes producir dentro de los límites que pongas en *Extracción* (o el máximo del mapa).
-4. **Alternativas**: marca las que tienes desbloqueadas. Las bloqueadas no aparecen en los desplegables ni las usa el optimizador.
+4. **Desbloqueos**: tu progreso en la partida y las alternativas que tienes.
+   - **Progreso de tu partida** (arriba de la pestaña): elige *Hasta el tier N* para que el planificador use solo lo que tienes: recetas, edificios, Miner, cintas, tuberías, extractores y alternativas que puedes conseguir. Por defecto está en *Todo desbloqueado (sin filtro)* y todo funciona como siempre.
+     - *Hitos*: los de tu tier salen marcados. Puedes marcar o desmarcar alguno suelto: queda resaltado como distinto del tier, se conserva aunque cambies de tier y *Ajustar al tier* lo deshace.
+     - *MAM*: marca los nodos investigados, uno a uno o el árbol entero. Los Docs del juego no traen el orden de cada árbol, así que no se comprueba qué nodo va antes.
+     - Si un objetivo no se puede fabricar con tu progreso, el aviso dice qué hito o nodo falta (el camino más barato). En *Manual* pasa a externo con aviso; si una receta que elegiste deja de estar disponible, se usa la de reserva con un aviso en su fila y tu elección se recupera al volver a permitirla.
+     - Overclock por encima del 100 % y Somersloops: solo se avisa si aún no tienes su nodo del MAM.
+     - Las fábricas nuevas empiezan con las piezas de la fase del Space Elevator en curso, y el preset marca la fase en curso y el tier que necesitan las siguientes.
+     - La exportación en Markdown indica el progreso usado.
+   - **Lista de alternativas**: marca las que tienes desbloqueadas. Las bloqueadas no aparecen en los desplegables ni las usa el optimizador.
+     - Con progreso, las que aún no puedes conseguir en un disco duro salen desactivadas con *Requiere…* (el hito o nodo que falta). Las que da el MAM (Carbón vegetal, Biocarbón y Turbocombustible empaquetado o sin empaquetar) salen marcadas *Por el MAM*.
+     - *Sílice destilada* viene con la alternativa *Purificación de cuarzo*: solo está disponible si la tienes.
    - **Asesor de alternativas** (arriba de la pestaña): recalcula la fábrica activa con el optimizador y su criterio para decirte qué alternativas le convienen.
      - *Candidatas*: cuánto mejora el plan al desbloquear cada alternativa bloqueada. Puedes evaluar todas o solo *Mi lista* (por ejemplo, las que te ofrece un disco duro); la lista se busca en español o inglés y no se guarda.
      - *Activas*: cuánto empeora al bloquear cada alternativa desbloqueada («Importa», «Prescindible» o «No se usa»).
      - Para cada una muestra el cambio del criterio y las diferencias en uso del mapa, energía, máquinas y coste de construcción (puntos del Sink). Desde cada fila puedes desbloquearla o bloquearla (`Ctrl+Z` deshace); los desbloqueos valen para todas las fábricas.
-     - Cada alternativa se evalúa por separado: algunas solo compensan combinadas con otras. Tampoco sabe en qué punto de la partida estás, así que puede recomendar alternativas que aún no puedes conseguir.
+     - Cada alternativa se evalúa por separado: algunas solo compensan combinadas con otras. Con el progreso indicado, solo evalúa las que puedes conseguir; sin él, puede recomendar alternativas que aún no están a tu alcance.
      - Con la fábrica en *Manual*, la base es el plan óptimo con tus alternativas actuales, no tu selección manual.
      - En fábricas grandes con energía generada tarda unos segundos: lo hace por partes, con barra de progreso y botón *Cancelar*.
 5. **Producción**: cada fila tiene su reloj (%) y sus Somersloops. La tabla calcula los Power Shards necesarios, el reloj uniforme ("real") y la potencia.
@@ -82,6 +92,7 @@ El contexto técnico (arquitectura, decisiones, reglas y pendientes) está en `C
 - **Generación de energía:** no incluye la geotérmica ni el Alien Power Augmenter.
 - **Asesor de alternativas con pozos:** si indicas Pressurizers, su potencia se reparte con una aproximación; en ese caso, desbloquear una alternativa puede empeorar algo el criterio (o bloquearla, mejorarlo). Sin pozos, nunca pasa.
 - **Consumo real:** se calcula con máquinas enteras y reloj uniforme, igual o menor que el planificado; puede sobrar algo de generación.
+- **Progreso y MAM:** los Docs del juego no incluyen el orden de los nodos dentro de cada árbol del MAM ni qué abre cada árbol, así que no se comprueban. La relación entre fases del Space Elevator y tiers viene de la wiki.
 - **Máximo del mapa:** corresponde al mapa por defecto (wiki, nodos de la 1.x). Si usas nodos aleatorios de la 1.2, cambia los límites a mano.
 - **Desglose del árbol:** es bruto, no descuenta subproductos; los totales netos están en *Producción*.
 

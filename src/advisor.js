@@ -39,9 +39,12 @@ const Advisor = (() => {
     const wells = Object.keys(E.pressAll(cfg)).length > 0;
     const isLocked = id => !!(cfg.locked || {})[id];
     const alts = o.db.recipes.filter(r => r.alt).map(r => r.id);
-    const pool = mode === "cand" ? (opt.ids ? alts.filter(id => opt.ids.includes(id)) : alts).filter(isLocked) : alts.filter(id => !isLocked(id));
+    // con filtro de progreso, solo las que se pueden conseguir por disco duro: las que aún no se pueden conseguir (unavail) y las
+    // que da el MAM (no dependen de la lista) no cambian nada al desbloquearlas o bloquearlas
+    const st = id => E.altState(cfg, id).state, mine = mode === "cand" ? (opt.ids ? alts.filter(id => opt.ids.includes(id)) : alts).filter(isLocked) : alts.filter(id => !isLocked(id));
+    const pool = mine.filter(id => st(id) === "ok"), unavail = mine.filter(id => st(id) === "no");
     const used = new Set(base.steps.filter(s => s.p.kind === "recipe").map(s => s.p.id));
-    const job = {o, mode, cfg, plan, wells, rows: [], queue: [], done: 0, ms: 0, cancelled: false,
+    const job = {o, mode, cfg, plan, wells, unavail, rows: [], queue: [], done: 0, ms: 0, cancelled: false,
       base: {res: base, error: base.error, crit: base.error ? null : crit(base, plan), sum: base.error ? null : summary(o, cfg, base)}};
     // sin plan base no hay nada que empeorar; si la base ya no tiene techo (maximizar), desbloquear no le pone techo: nada que comparar
     job.blocked = !!base.error && (mode === "act" || base.error === "unbounded");

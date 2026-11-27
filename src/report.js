@@ -58,11 +58,12 @@ const Report = (() => {
   const rateTxt = l => l.rate === null ? "–" : nf(l.rate) + " " + l.unit;
   const recTxt = l => (l.alt ? "Alt: " : "") + l.recipe;
 
-  // c: coste de construcción (opcional), se añade como capítulo final
-  function markdown(rep, title, c) {
+  // c: coste de construcción (opcional), se añade como capítulo final; note: línea bajo el resumen (p. ej. el progreso usado)
+  function markdown(rep, title, c, note) {
     const H = "| Producto | Receta | Producción | Unidades | Reloj real | Fragm. | Somersloops | MW |\n|---|---|--:|--:|--:|--:|--:|--:|";
     const t = rep.total, out = [`# Desglose de máquinas: ${mdCell(title)}`, "",
       `${nf(t.units, 0)} máquinas · consumo ${nf(t.cons, 1)} MW` + (t.gen ? ` · generación ${nf(t.gen, 1)} MW` : "") + ` · ${nf(t.shards, 0)} fragmentos · ${nf(t.sloops, 0)} Somersloops`];
+    if (note) out.push("", note);
     for (const s of rep.sections) {
       out.push("", `## ${s.title}`);
       for (const b of s.buildings) {

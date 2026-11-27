@@ -173,6 +173,97 @@ specials = {"shard": {"id": shard_c["ClassName"], "en": shard_c["mDisplayName"],
             "sloop": {"id": sloop_c["ClassName"], "en": sloop_c["mDisplayName"], "es": es_name.get(sloop_c["ClassName"], sloop_c["mDisplayName"])},
             "workshop": {"id": workshop_c[0]["ClassName"], "en": workshop_c[0]["mDisplayName"], "es": es_name.get(workshop_c[0]["ClassName"], workshop_c[0]["mDisplayName"])}}
 
+# ---------- progreso: qué hitos, nodos del MAM y alternativas desbloquean cada receta y edificio del planificador
+# Tipos: start (planos iniciales), hub (mejoras del HUB, tier 0), ms (hitos), mam (nodos del MAM), alt (alternativas de disco duro).
+# Los esquemas «de fondo» (EST_Custom concedidos por otro con BP_UnlockSchematic_C) se suman al que los concede.
+SCH = {s["ClassName"]: s for s in EN["FGSchematic"]}
+def sch_ids(txt): return re.findall(r"([A-Za-z0-9_\-]+_C)'", txt or "")
+def sch_recipes(sid): return [r for u in SCH[sid]["mUnlocks"] if u["Class"] == "BP_UnlockRecipe_C" for r in sch_ids(u.get("mRecipes"))]
+def sch_grants(sid): return [x for u in SCH[sid]["mUnlocks"] if u["Class"] == "BP_UnlockSchematic_C" for x in sch_ids(u.get("mSchematics"))]
+granted_by = {}
+for _sid in SCH:
+    for _g in sch_grants(_sid): granted_by.setdefault(_g, []).append(_sid)
+def sch_deps(sid):  # una dependencia de un esquema de fondo equivale a la del esquema que lo concede
+    out = []
+    for x in (x for d in SCH[sid]["mSchematicDependencies"] for x in sch_ids(d.get("mSchematics"))):
+        if x in SCH and SCH[x]["mType"] == "EST_Custom" and len(granted_by.get(x, [])) == 1: x = granted_by[x][0]
+        out.append(x)
+    return out
+def sch_tree(sid):
+    m = re.search(r"/Schematics/Research/([^/]+)/", SCH[sid]["FullName"]); return m.group(1) if m else None
+def folded(sid, seen=None):  # recetas propias + las de los esquemas de fondo que concede (transitivo)
+    seen = seen or set(); seen.add(sid); out = list(sch_recipes(sid))
+    for g in sch_grants(sid):
+        if g in SCH and SCH[g]["mType"] == "EST_Custom" and g not in seen: out += folded(g, seen)
+    return out
+KIND = {"EST_Milestone": "ms", "EST_Tutorial": "hub", "EST_MAM": "mam"}
+def kind_of(sid):
+    s = SCH[sid]
+    if sid == "Schematic_StartingRecipes_C": return "start"
+    if s["mType"] == "EST_MAM" and s["mDisplayName"].startswith("Discontinued"): return None   # nodos retirados del árbol
+    return KIND.get(s["mType"])
+by_rec = {}   # receta -> esquemas de progreso que la dan
+for sid in SCH:
+    k = kind_of(sid)
+    if k:
+        for r in folded(sid): by_rec.setdefault(r, set()).add(sid)
+rec_ids = {r["id"] for r in recipes}
+bld_ids = set(BUILD_CLASSES) | {f"Build_ConveyorBeltMk{n}_C" for n in range(1, 7)} | {"Build_Pipeline_C", "Build_PipelineMK2_C"}
+bld_of = {}   # Build_X_C -> receta de la Build Gun
+for c in EN["FGRecipe"]:
+    if "BP_BuildGun_C" in (c.get("mProducedIn") or ""):
+        for it, _ in parse_amounts(c.get("mProduct")):
+            if it.startswith("Desc_") and "Build_" + it[5:] in bld_ids: bld_of["Build_" + it[5:]] = c["ClassName"]
+p_bld = {b: sorted(by_rec.get(bld_of.get(b), ())) for b in sorted(bld_ids)}
+if [b for b, w in p_bld.items() if not w]: sys.exit(f"Edificios sin hito que los desbloquee: {[b for b, w in p_bld.items() if not w]}")
+# alternativas (disco duro): sus dependencias son las condiciones para que un disco duro te la ofrezca (todas)
+p_alt, p_rec = {}, {}
+for sid, s in SCH.items():
+    if s["mType"] != "EST_Alternate": continue
+    rs = [r for r in sch_recipes(sid) if r in rec_ids]
+    if not rs: continue
+    p_alt[sid] = {"deps": sch_deps(sid), "recipes": rs}
+    for r in rs: p_rec.setdefault(r, {}).setdefault("drive", []).append(sid)
+    # esquemas de fondo que concede una alternativa (Sílice destilada con «Quartz Purification»): van con su receta
+    for g in sch_grants(sid):
+        for r in (folded(g) if g in SCH else []):
+            if r in rec_ids: p_rec.setdefault(r, {})["with"] = rs[0]
+for r in rec_ids:
+    if r in by_rec: p_rec.setdefault(r, {})["ways"] = sorted(by_rec[r])
+orphan = [r["id"] for r in recipes if not r["id"].startswith("Gen_") and r["id"] not in p_rec]
+if orphan: sys.exit(f"Recetas sin hito, nodo ni alternativa que las desbloquee: {orphan}")
+# esquemas que se muestran: los que dan recetas o edificios del planificador, más los que piden las alternativas
+# y los nodos del MAM de overclock y Somersloops
+feat = {}
+for sid, s in SCH.items():
+    for u in s["mUnlocks"]:
+        if u["Class"] == "BP_UnlockBuildOverclock_C": feat["overclock"] = sid
+        if u["Class"] == "BP_UnlockBuildProductionBoost_C": feat["sloop"] = sid
+used_sch = {x for w in p_rec.values() for x in w.get("ways", [])} | {x for w in p_bld.values() for x in w} | {d for a in p_alt.values() for d in a["deps"]} | set(feat.values())
+bad = [x for x in used_sch if not kind_of(x)]
+if bad: sys.exit(f"Dependencias de un tipo inesperado: {bad}")
+p_sch = {}
+for sid in sorted(used_sch):
+    s = SCH[sid]; k = kind_of(sid)
+    e = {"t": k, "tier": int(f(s["mTechTier"])) if k in ("ms",) else 0, "en": s["mDisplayName"], "es": es_name.get(sid, s["mDisplayName"])}
+    if k == "mam": e["tree"] = sch_tree(sid)
+    p_sch[sid] = e
+# árboles del MAM: nombres propios (los Docs no exportan los árboles) y nodos en orden de clase
+TREES = {"Caterium_RS": ("Caterium", "Caterio"), "Quartz_RS": ("Quartz", "Cuarzo"), "Sulfur_RS": ("Sulfur", "Azufre"), "Mycelia_RS": ("Mycelia", "Micelios"),
+         "PowerSlugs_RS": ("Power Slugs", "Babosas de energía"), "AlienOrganisms_RS": ("Alien Organisms", "Organismos alienígenas"),
+         "AlienTech_RS": ("Alien Technology", "Tecnología alienígena"), "Nutrients_RS": ("Nutrients", "Nutrientes")}
+natkey = lambda x: [int(t) if t.isdigit() else t for t in re.split(r"(\d+)", x)]
+p_trees = {}
+for sid, e in p_sch.items():
+    if e["t"] == "mam":
+        if e["tree"] not in TREES: sys.exit(f"Árbol del MAM sin nombre: {e['tree']}")
+        p_trees.setdefault(e["tree"], {"en": TREES[e["tree"]][0], "es": TREES[e["tree"]][1], "nodes": []})["nodes"].append(sid)
+for t in p_trees.values(): t["nodes"].sort(key=natkey)
+p_trees = dict(sorted(p_trees.items(), key=lambda kv: kv[1]["es"]))
+# fases del Space Elevator: tier más alto disponible mientras la fase n está en curso (cada fase entregada abre los dos tiers
+# siguientes). No está en los Docs; fuente: satisfactory.wiki.gg/wiki/Space_Elevator. Las pruebas lo contrastan con las recetas.
+progress = {"sch": p_sch, "trees": p_trees, "rec": p_rec, "bld": p_bld, "alt": p_alt, "feat": feat, "phaseTier": [2, 4, 6, 8, 9]}
+
 purity = {"Impure": 0.5, "Normal": 1.0, "Pure": 2.0}
 belts = {f"Mk.{n}": f([c for c in EN["FGBuildableConveyorBelt"] if c["ClassName"] == f"Build_ConveyorBeltMk{n}_C"][0]["mSpeed"]) / 2 for n in range(1, 7)}
 pipes = {"Mk.1": f([c for c in EN["FGBuildablePipeline"] if c["ClassName"] == "Build_Pipeline_C"][0]["mFlowLimit"]) * 60,
@@ -200,7 +291,7 @@ for k, v in RAWCOL.items():
 db = {"meta": {"game": "Satisfactory", "source": "CommunityResources/Docs (en-US, es-ES)", "generated": __import__("datetime").date.today().isoformat(),
                "docsMtime": os.path.getmtime(os.path.join(DOCS, "en-US.json")), "units": "por minuto; fluidos en m³/min"},
       "items": items, "recipes": recipes, "buildings": buildings, "extractors": extractors, "purity": purity,
-      "belts": belts, "pipes": pipes, "world": world, "buildCosts": build_costs, "specials": specials,
+      "belts": belts, "pipes": pipes, "world": world, "buildCosts": build_costs, "specials": specials, "progress": progress,
       "presets": {
         "Fase 5 del Space Elevator": ["Desc_SpaceElevatorPart_9_C", "Desc_SpaceElevatorPart_10_C", "Desc_SpaceElevatorPart_11_C", "Desc_SpaceElevatorPart_12_C"],
       }}

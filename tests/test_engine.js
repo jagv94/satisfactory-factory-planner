@@ -367,6 +367,95 @@ let csvParse, numCol;
   ok(rsu.state === "sinlimite" && Adv.groups(jsu).main[0] === rsu, "asesor: en Activas, si al bloquear una el plan queda sin techo, sale «Sin límite» (caso simulado)");
 }
 
+// ---------- filtro de progreso (cfg.progress + db.progress)
+{
+  const PR = db.progress, Rep = require("../src/report.js"), Adv = require("../src/advisor.js");
+  const mamAll = () => Object.fromEntries(Object.values(PR.trees).flatMap(t => t.nodes).map(n => [n, true]));
+  const G = (tier, x) => Object.assign({tier, add: {}, rm: {}, mam: {}}, x || {});
+  const C = (progress, x) => Object.assign({clock: 1, ext: {}, limits: {}, locked: {}, belt: "Mk.6", pipe: "Mk.2", progress}, x || {});
+  const P = (targets, x) => Object.assign({targets, sel: {}, rc: {}, mode: "opt", objective: "weighted", ban: {}}, x || {});
+  const same = (a, b) => !a.error && !b.error && a.steps.length === b.steps.length && a.steps.every((s, i) => s.p.id === b.steps[i].p.id && s.x === b.steps[i].x);
+  const phase = n => ({1: [1], 2: [1, 2, 3], 3: [2, 4, 5], 4: [6, 7, 8, 9], 5: [9, 10, 11, 12]})[n].map(i => ({item: `Desc_SpaceElevatorPart_${i}_C`, rate: 1}));
+  const ok1 = (cfg, id) => E.allowed(cfg, id);
+  const normal = db.recipes.filter(r => !r.alt);
+
+  // 56) migración: sin progress, o con tier null (filtro apagado), todo como antes; con todo marcado (tier 9, todo el MAM),
+  // salen las 184 recetas normales y todos los edificios, y el plan es idéntico al de sin filtro
+  const base = {clock: 1, ext: {}, limits: {}, locked: {}}, full = C(G(9, {mam: mamAll()}));
+  const plans = [P(f5), P(f5, {objective: "power", energy: "gen"}), P(f5, {mode: "manual"}), P([{item: "Desc_NitricAcid_C", rate: 30}], {energy: "gen"})];
+  ok(E.progress(base).on === false && E.progress(C(G(null))).on === false && E.progress(C(null)).on === false
+    && plans.every(p => same(E.solve(base, p), E.solve(C(G(null, {mam: {}})), p)) && same(E.solve(base, p), E.solve(full, p)))
+    && normal.every(r => ok1(full, r.id)) && Object.values(E.progress(full).bld).every(Boolean) && db.recipes.filter(r => r.alt).every(r => ok1(full, r.id) === ok1(base, r.id)),
+    `progreso: sin filtro (o apagado) el plan no cambia; con todo marcado salen las ${normal.length} recetas normales, todos los edificios y el mismo plan`);
+  // 57) recetas y edificios conocidos por tier (de los Docs)
+  const at = t => E.progress(C(G(t)));
+  const firstTier = b => [...Array(10).keys()].find(t => at(t).bld[b]);
+  const known = {Build_ConstructorMk1_C: 0, Build_SmelterMk1_C: 0, Build_MinerMk1_C: 0, Build_ConveyorBeltMk1_C: 0, Build_AssemblerMk1_C: 2, Build_ConveyorBeltMk2_C: 2,
+    Build_WaterPump_C: 3, Build_Pipeline_C: 3, Build_FoundryMk1_C: 3, Build_MinerMk2_C: 4, Build_OilRefinery_C: 5, Build_ConveyorBeltMk4_C: 5, Build_PipelineMK2_C: 6,
+    Build_ManufacturerMk1_C: 6, Build_Blender_C: 7, Build_ConveyorBeltMk5_C: 7, Build_MinerMk3_C: 8, Build_FrackingExtractor_C: 8, Build_HadronCollider_C: 8, Build_Converter_C: 9, Build_ConveyorBeltMk6_C: 9};
+  const badT = Object.entries(known).filter(([b, t]) => firstTier(b) !== t).map(([b, t]) => `${b} ${firstTier(b)}≠${t}`);
+  ok(!badT.length && at(3).miner === "Mk.1" && at(4).miner === "Mk.2" && at(2).pipe === null && at(5).belt === "Mk.4" && !at(4).ext.oil && at(5).ext.oil && !at(7).ext.well && at(8).ext.well
+    && ok1(C(G(0)), "Recipe_IronPlate_C") && !ok1(C(G(4)), "Recipe_Plastic_C") && ok1(C(G(5)), "Recipe_Plastic_C") && !ok1(C(G(5)), "Recipe_Computer_C") && ok1(C(G(6)), "Recipe_Computer_C"),
+    "progreso: edificios, Miner, cintas, tuberías, extractores y recetas conocidos aparecen en su tier" + (badT.length ? " — " + badT.join(", ") : ""));
+  // 58) varias fuentes (Sílice: nodo del MAM o hito 7-1) y desbloqueos de fondo (Plástico residual con «Procesamiento de petróleo»)
+  ok(!ok1(C(G(3)), "Recipe_Silica_C") && ok1(C(G(3, {mam: {Research_Quartz_1_2_C: true}})), "Recipe_Silica_C") && ok1(C(G(7)), "Recipe_Silica_C")
+    && E.recipeReq(C(G(3)), "Recipe_Silica_C").sids.join() === "Research_Quartz_1_2_C" && !ok1(C(G(4)), "Recipe_ResidualPlastic_C") && ok1(C(G(5)), "Recipe_ResidualPlastic_C"),
+    "progreso: una receta con varias fuentes (Sílice: MAM o hito 7-1; pide la más barata) y un desbloqueo de fondo (Plástico residual en el tier 5)");
+  // 59) alternativas: requisitos de disco duro (solo hitos; hitos + MAM) y las que da el MAM (no dependen de la lista)
+  const PURE = "Recipe_Alternate_PureIronIngot_C", CATCB = "Recipe_Alternate_CircuitBoard_2_C", COAL = "Recipe_Alternate_Coal_1_C", CCOAL = "Research_Sulfur_CompactedCoal_C";
+  const st = (c, id) => E.altState(c, id);
+  ok(st(C(G(4)), PURE).state === "no" && st(C(G(4)), PURE).req.sids.join() === "Schematic_5-1_C" && st(C(G(5)), PURE).state === "ok" && ok1(C(G(5)), PURE) && !ok1(C(G(5), {locked: {[PURE]: true}}), PURE)
+    && st(C(G(5)), CATCB).state === "no" && st(C(G(5)), CATCB).req.sids.join() === "Research_Caterium_1_C" && st(C(G(5, {mam: {Research_Caterium_1_C: true}})), CATCB).state === "ok"
+    && st(C(G(3, {mam: {[CCOAL]: true}})), COAL).state === "mam" && ok1(C(G(3, {mam: {[CCOAL]: true}}), {locked: {[COAL]: true}}), COAL)
+    && st(C(G(3)), COAL).state === "ok" && !ok1(C(G(3), {locked: {[COAL]: true}}), COAL) && !ok1({locked: {[COAL]: true}}, COAL) && st(base, COAL).state === "ok",
+    "progreso: alternativas de disco duro según sus requisitos (hitos y nodos del MAM); las que da el MAM no dependen de la lista; sin filtro, como antes");
+  // 60) Sílice destilada: va incluida con «Quartz Purification» (con y sin filtro)
+  const DIST = "Recipe_Alternate_Silica_Distilled_C", QP = "Recipe_Alternate_Quartz_Purified_C";
+  ok(PR.rec[DIST].with === QP && ok1(base, DIST) && !ok1({locked: {[QP]: true}}, DIST) && ok1(full, DIST) && !ok1(C(G(9, {mam: mamAll()}), {locked: {[QP]: true}}), DIST)
+    && !ok1(C(G(6)), DIST) && E.recipeReq(C(G(6)), DIST).with === QP && E.recipeReq(C(G(6)), DIST).sids.includes("Schematic_7-5_C"),
+    "progreso: Sílice destilada solo con «Quartz Purification» desbloqueada (y conseguible); lo que falta nombra esa alternativa");
+  // 61) objetivo que no se puede fabricar: Optimizar da «noprog» con lo que falta; Manual lo trata como externo
+  const np = E.solveOpt(C(G(4)), P([{item: "Desc_Computer_C", rate: 5}])), npW = E.solveOpt(C(G(2)), P([{item: "Desc_Water_C", rate: 60}]));
+  const man = E.solveManual(C(G(4)), P([{item: "Desc_Computer_C", rate: 5}], {mode: "manual"}));
+  ok(np.error === "noprog" && np.noprog.targets.join() === "Desc_Computer_C" && np.noprog.blockers.some(b => b.item === "Desc_Computer_C" && b.sids.join() === "Schematic_5-2_C")
+    && npW.error === "noprog" && npW.noprog.blockers[0].item === "Desc_Water_C" && npW.noprog.blockers[0].sids.join() === "Schematic_3-1_C"
+    && !man.error && man.steps.some(s => s.p.kind === "import" && s.p.item === "Desc_Computer_C"),
+    "progreso: un objetivo que no se puede fabricar da un error con lo que falta (Ordenador: hito 5-2; Agua: hito 3-1); en Manual, pasa a externo");
+  // 62) receta y extractor por defecto de reserva: energía sin centrales de carbón → biomasa; nitrógeno sin pozos → externo
+  ok(E.defaultSel(base, E.POWER) === "Gen_Desc_Coal_C" && E.R[E.defaultSel(C(G(2)), E.POWER)].building === "Build_GeneratorBiomass_Automated_C" && E.defaultSel(C(G(3)), E.POWER) === "Gen_Desc_Coal_C"
+    && E.defaultSel(base, "Desc_NitrogenGas_C") === "x:well" && E.defaultSel(C(G(7)), "Desc_NitrogenGas_C") === "import" && !E.options(C(G(2)), "Desc_Water_C").some(o => o.startsWith("x:")),
+    "progreso: si la receta o el extractor habitual no está disponible, se usa el primero disponible (o externo)");
+  // 63) selección manual que el progreso deja sin disponer: se usa la de reserva, la elegida se conserva y vuelve al permitirla
+  const pm = P([{item: "Desc_IronPlate_C", rate: 60}], {mode: "manual", sel: {Desc_IronIngot_C: PURE}}), keep = JSON.stringify(pm.sel);
+  const r3 = E.solveManual(C(G(3)), pm), r5 = E.solveManual(C(G(5)), pm);
+  ok(E.selOf(C(G(3)), pm, "Desc_IronIngot_C") === "Recipe_IngotIron_C" && r3.steps.some(s => s.p.id === "Recipe_IngotIron_C") && JSON.stringify(pm.sel) === keep
+    && E.selOf(C(G(5)), pm, "Desc_IronIngot_C") === PURE && r5.steps.some(s => s.p.id === PURE),
+    "progreso: una receta elegida que el progreso no permite se sustituye por la de reserva sin perder la elección, que vuelve al permitirla");
+  // 64) hitos sueltos: se guardan como diferencias respecto al tier (add / rm) y se conservan al cambiar de tier
+  const gd = G(5, {add: {"Schematic_6-5_C": true}, rm: {"Schematic_5-1_C": true}}), d5 = E.progress(C(gd)), d6 = E.progress(C(Object.assign({}, gd, {tier: 6})));
+  ok(d5.done.has("Schematic_6-5_C") && !d5.done.has("Schematic_5-1_C") && d5.pipe === "Mk.2" && !d5.ext.oil && d6.done.has("Schematic_6-5_C") && !d6.done.has("Schematic_5-1_C") && d6.done.has("Schematic_5-2_C") && !d6.done.has("Schematic_7-1_C"),
+    "progreso: hitos sueltos por encima (add) o por debajo (rm) del tier, y se conservan al cambiar de tier");
+  // 65) Space Elevator: la tabla de fases (tier más alto de cada fase, de la wiki) cuadra con las recetas: las piezas de la fase n
+  // se pueden fabricar justo a partir de ese tier (con todo el MAM), no antes
+  const okPh = (n, t) => !E.solveOpt(C(G(t, {mam: mamAll()})), P(phase(n))).error;
+  ok(PR.phaseTier.length === 5 && PR.phaseTier.every((t, k) => okPh(k + 1, t) && !okPh(k + 1, t - 1)),
+    `progreso: las piezas de cada fase del Space Elevator salen justo a partir de su tier (${PR.phaseTier.join(", ")})`);
+  // 66) Miner, cinta y tubería: con filtro, como mucho los desbloqueados (la elección guardada se conserva); overclock y Somersloops
+  const cm = C(G(3), {ext: {Desc_OreIron_C: {tier: "Mk.3"}}, belt: "Mk.6"}), pr = E.proc(cm, P([]), "x:miner", "Desc_OreIron_C");
+  ok(pr.building === "x:miner:Mk.1" && pr.out.Desc_OreIron_C === 60 && cm.ext.Desc_OreIron_C.tier === "Mk.3" && E.belt(cm) === "Mk.2" && cm.belt === "Mk.6" && E.belt(base) === undefined
+    && E.belt(C(null, {belt: "Mk.6"})) === "Mk.6" && !at(9).overclock && E.progress(C(G(3, {mam: {[PR.feat.overclock]: true}}))).overclock && !at(9).sloop,
+    "progreso: Miner, cinta y tubería limitados a lo desbloqueado sin perder la elección; overclock y Somersloops según su nodo del MAM");
+  // 67) asesor con filtro: solo candidatas que se pueden conseguir; las que no, contadas aparte; las del MAM no se evalúan
+  const o = {db, engine: E, report: Rep}, lockAll = Object.fromEntries(db.recipes.filter(r => r.alt).map(r => [r.id, true]));
+  const ja = Adv.prepare(o, C(G(5, {mam: {[CCOAL]: true}}), {locked: lockAll}), P(f5.slice(0, 1).map(t => ({item: "Desc_IronPlate_C", rate: 60}))), {mode: "cand"});
+  ok(ja.rows.some(r => r.id === PURE) && !ja.rows.some(r => r.id === COAL) && !ja.rows.some(r => r.id === CATCB) && ja.unavail.includes(CATCB) && !ja.unavail.includes(COAL)
+    && Adv.prepare(o, {clock: 1, ext: {}, limits: {}, locked: lockAll}, P([{item: "Desc_IronPlate_C", rate: 60}]), {mode: "cand"}).unavail.length === 0,
+    "progreso: el asesor solo ofrece candidatas que tu progreso permite conseguir y cuenta aparte las que no");
+  // 68) exportación: el Markdown lleva la línea del progreso usado
+  const A = E.analyze(base, E.solve(base, P(f5))), rep = Rep.breakdown(A, {db, lang: "es", cfg: base, engine: E}), md = Rep.markdown(rep, "x", null, "Progreso: hasta el tier 5.");
+  ok(md.split("\n")[4] === "Progreso: hasta el tier 5." && !Rep.markdown(rep, "x").includes("Progreso"), "exportación: el Markdown incluye la línea de progreso, si se da");
+}
+
 // ---------- HTML generado
 // 22) Planificador.html al día con src/ y data/, sin errores de sintaxis (node --check) y arrancando en un DOM mínimo
 {
@@ -428,7 +517,7 @@ let csvParse, numCol;
   const b5 = boot(savedA({Desc_NitrogenGas_C: {wells: 2}}, "manual")), n5 = String(b5.els.advNote && b5.els.advNote.innerHTML);
   const nAlt = db.recipes.filter(r => r.alt).length;
   ok(!b4.err && !b5.err && vm.runInContext("typeof Advisor", b4.ctx) === "object" && String(b4.els.advName.textContent) === "a" && String(b4.els.altCount.textContent).startsWith(`${nAlt} de ${nAlt}`)
-    && [n4, n5].every(n => n.includes("Cada alternativa se evalúa por separado") && n.includes("aún no hay filtro por tier") && n.includes("0,01 %"))
+    && [n4, n5].every(n => n.includes("Cada alternativa se evalúa por separado") && n.includes("indica tu progreso arriba para filtrarlas") && n.includes("0,01 %"))
     && n4.includes("nunca empeora") && !n4.includes("Tu fábrica está en Manual") && !n5.includes("nunca empeora") && n5.includes("Pressurizers") && n5.includes("Tu fábrica está en Manual")
     && String(b5.els.advCrit.textContent).includes("Manual"),
     "la pestaña Alternativas pinta el asesor con sus avisos (con pozos no afirma la monotonía; en Manual, base óptima)" + ((b4.err || b5.err) ? ` — ${(b4.err || b5.err).message}` : ""));
@@ -446,6 +535,43 @@ let csvParse, numCol;
   ok(!e67 && !b6.err && !b7.err && o6.includes(">Sin límite<small>Con esta alternativa la escala no tiene techo: algún recurso no está limitado.</small>") && !o6.includes("Sin solución")
     && o7.includes("no tiene techo, así que no hay con qué comparar") && !o7.includes("<table"),
     "el panel pinta «Sin límite» con su nota y, con la base sin techo, avisa de que no hay con qué comparar" + (e67 ? ` — ${e67.message}` : ""));
+  // eventos como los de la interfaz: change (target con id/value/checked/dataset) o click (en un botón); luego corre el render diferido
+  const fire = (b, type, t) => { const target = Object.assign({dataset: {}}, t); target.closest = q => q === "button" ? target : null;
+    for (const f of b.L[type] || []) f({target, preventDefault() {}}); for (let k = 0; k < 50 && b.T.length; k++) b.T.shift()(); };
+  const savedG = (progress, plan, x) => JSON.stringify(Object.assign({v: 2, cur: 0, tab: "alts", cfg: {clock: 1, ext: {}, locked: {}, belt: "Mk.6", pipe: "Mk.2", progress},
+    plans: [Object.assign({name: "g", targets: [{item: "Desc_IronPlate_C", rate: 60}], sel: {}, rc: {}, mode: "opt", objective: "weighted", ban: {}, energy: "off", gridMW: 0}, plan || {})]}, x || {}));
+  const nDiff = b => (String(b.els.pgMs.innerHTML).match(/class="pgc diff"/g) || []).length;
+  // 69) pestaña Desbloqueos con progreso: resumen, hitos sueltos resaltados, alternativas que aún no se pueden conseguir
+  // desactivadas con «Requiere…», las del MAM marcadas «Por el MAM», Sílice destilada con «Quartz Purification» y el aviso del asesor
+  const b8 = boot(savedG({tier: 5, add: {"Schematic_6-5_C": true}, rm: {"Schematic_5-1_C": true}, mam: {Research_Sulfur_CompactedCoal_C: true}}));
+  let e8 = null; try { b8.els.af.value = "all"; fire(b8, "change", {id: "af"}); } catch (e) { e8 = e; }
+  const al8 = String(b8.els.alts.innerHTML), QPname = db.recipes.find(r => r.id === "Recipe_Alternate_Quartz_Purified_C").es;
+  const qpRow = (al8.split('<label class="alt-r').find(x => x.includes(`<b>${QPname}</b>`)) || "");
+  ok(!b8.err && !e8 && String(b8.els.pgSum.textContent).includes("fase 3 del Space Elevator en curso") && nDiff(b8) === 2 && b8.els.pgFit.hidden === false
+    && al8.includes("Por el MAM: ") && al8.includes("Requiere el hito") && al8.includes(" disabled") && qpRow.includes("Incluye Sílice destilada")
+    && String(b8.els.altCount.textContent).includes("se pueden conseguir con tu progreso") && String(b8.els.advNote.innerHTML).includes("Solo se evalúan las alternativas que tu progreso permite conseguir"),
+    "Desbloqueos con progreso: resumen, hitos sueltos resaltados, alternativas con «Requiere…» o «Por el MAM», Sílice destilada y aviso del asesor" + (b8.err || e8 ? ` — ${(b8.err || e8).message}` : ""));
+  // 70) hitos sueltos al cambiar de tier: se conservan como diferencias (6-5 queda dentro del tier 6: ya no es diferencia;
+  // quitar 5-1 sí) y «Ajustar al tier» las elimina
+  let e9 = null, d9 = [];
+  try { fire(b8, "change", {id: "pgTier", value: "6"}); d9.push(nDiff(b8), b8.els.pgFit.hidden); fire(b8, "change", {id: "pgTier", value: "5"}); d9.push(nDiff(b8));
+    fire(b8, "click", {id: "pgFit"}); d9.push(nDiff(b8), b8.els.pgFit.hidden); fire(b8, "change", {id: "pgTier", value: "6"}); d9.push(nDiff(b8)); } catch (e) { e9 = e; }
+  ok(!e9 && d9.join() === "1,false,2,0,true,0", `hitos sueltos: se conservan al cambiar de tier, se resaltan y «Ajustar al tier» los quita (${d9.join()})` + (e9 ? ` — ${e9.message}` : ""));
+  // 71) Producción y cabecera con progreso: la receta elegida que no se puede usar avisa en su fila (y se usa la de reserva);
+  // lo que no se puede fabricar pasa a externo con aviso; relojes > 100 % sin su nodo; cinta limitada; fases en el preset
+  const b10 = boot(savedG({tier: 3, add: {}, rm: {}, mam: {}}, {mode: "manual", targets: [{item: "Desc_IronPlate_C", rate: 60}, {item: "Desc_Computer_C", rate: 1}],
+    sel: {Desc_IronIngot_C: "Recipe_Alternate_PureIronIngot_C"}, rc: {Recipe_IronPlate_C: {clock: 1.5}}}, {tab: "prod"}));
+  const w10 = String(b10.els.warns.innerHTML), p10 = String(b10.els.prod.innerHTML), pre10 = String(b10.els.preset.innerHTML);
+  const b11 = boot(savedG({tier: 4, add: {}, rm: {}, mam: {}}, {targets: [{item: "Desc_Computer_C", rate: 5}]}, {tab: "prod"})), w11 = String(b11.els.warns.innerHTML);
+  let e10 = null; try { fire(b10, "click", {id: "pNew"}); } catch (e) { e10 = e; }
+  const t10 = String(b10.els.targets.innerHTML), part = id => db.items[id].es;
+  ok(!b10.err && !b11.err && !e10 && p10.includes("Tu elección (") && p10.includes("no está disponible: requiere el hito") && p10.includes("al volver a permitirla, se recupera")
+    && w10.includes(`No puedes fabricar ${db.items.Desc_Computer_C.es} con tu progreso (requiere el hito`) && w10.includes("Hay relojes por encima del 100 %")
+    && String(b10.els.beltNote.textContent) === "Se usa Mk.2, la mayor que tienes; Mk.6 vuelve cuando la desbloquees." && pre10.includes("Fase 2 del Space Elevator (en curso)") && pre10.includes("Fase 5 del Space Elevator (requiere tier 9)")
+    && w11.includes(`Con tu progreso no se puede fabricar ${db.items.Desc_Computer_C.es}`) && w11.includes("Producción industrial")
+    && ["Desc_SpaceElevatorPart_1_C", "Desc_SpaceElevatorPart_2_C", "Desc_SpaceElevatorPart_3_C"].every(i => t10.includes(part(i))) && !t10.includes(part("Desc_SpaceElevatorPart_4_C")),
+    "Producción con progreso: aviso en la fila con la elección guardada, externos con lo que falta, overclock, cinta limitada, fases y fábrica nueva con la fase en curso"
+    + (b10.err || b11.err || e10 ? ` — ${(b10.err || b11.err || e10).message}` : ""));
 }
 console.log(fails ? `\n${fails} fallo(s)` : "\nTodo correcto");
 process.exitCode = fails ? 1 : 0;
