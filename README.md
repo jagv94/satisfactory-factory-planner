@@ -13,7 +13,7 @@ Herramienta para calcular fábricas de Satisfactory: qué recetas usar, cuántas
 | `Planificador.html` | La herramienta completa (datos incluidos). Es lo único necesario para usarla. |
 | `data/satisfactory_db.json` | Base de datos generada desde los archivos oficiales del juego. |
 | `icons/` | Opcional: iconos reales del juego. Si está vacía, se usan glifos propios. |
-| `src/` | Código fuente: `engine.js` (cálculo y optimizador), `glyphs.js`, `sankey.js`, `app.js`, `styles.css`, `index.template.html`. |
+| `src/` | Código fuente: `engine.js` (cálculo y optimizador), `glyphs.js`, `sankey.js`, `report.js` (desglose de máquinas y exportación), `app.js`, `styles.css`, `index.template.html`. |
 | `tools/docs_to_db.py` | Regenera la base de datos desde `CommunityResources/Docs` del juego. |
 | `tools/copiar_iconos.ps1` | Copia a `icons/` los iconos exportados con FModel. |
 | `build.py` | Vuelve a montar `Planificador.html` a partir de `src/` y `data/`. |
@@ -33,7 +33,11 @@ Herramienta para calcular fábricas de Satisfactory: qué recetas usar, cuántas
    - Generadores: Biomass Burner, carbón, combustible y central nuclear (uranio, plutonio y ficsonio), con overclock.
    - *Mínima potencia* minimiza el consumo total de la fábrica (incluidas las cadenas de combustible), sin contar lo que producen los generadores.
    - Los residuos nucleares se permiten como excedente, con aviso: no se pueden destruir en el AWESOME Sink. Para evitarlos, excluye las recetas nucleares en el optimizador.
-7. **Diagrama**: flujo de materias primas a objetivos. **Árbol**: desglose recursivo. **Excedentes**: lo que sobra.
+7. **Máquinas**: cuántos edificios de cada tipo necesitas, por secciones (Producción, Extracción y Energía). Despliega un edificio (o pulsa *Desplegar todo*) para ver para qué se usa: una línea por receta con su producto, producción, unidades, reloj real, Power Shards, Somersloops y MW. Así ves, por ejemplo, cuántos Constructors hacen placas y cuántos cable.
+   - En los extractores, la pureza que aparece es la configurada en *Extracción* para ese recurso, no un recuento de nodos reales.
+   - *Copiar* o *Descargar* exporta el desglose como lista de construcción, en **Markdown** (una tabla por edificio) o en **CSV**. El texto queda también en el cuadro de debajo, por si el navegador bloquea el portapapeles o la descarga.
+   - El **CSV usa formato español**: punto y coma como separador y coma decimal, pensado para abrirlo en Excel o LibreOffice en español. Lleva una fila por receta, sin filas de total, para poder filtrar y sumar.
+8. **Diagrama**: flujo de materias primas a objetivos. **Árbol**: desglose recursivo. **Excedentes**: lo que sobra.
 
 Atajo: `Ctrl+Z` deshace (fuera de los campos de texto).
 

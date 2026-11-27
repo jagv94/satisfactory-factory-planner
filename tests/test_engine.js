@@ -139,6 +139,61 @@ const cohP = ["Desc_NitrogenGas_C", "Desc_LiquidOil_C"].every(i => { const st = 
   return x <= 1e-9 || near(st.reduce((a, s) => a + s.x * (s.p.pshare || 0), 0), E.pressPower(cfgW2, i), 1e-6); });
 ok(!rP.error && rP.pressIter <= 12 && cohP && closes(AP), `Pressurizers: nítrico con «mínima potencia» converge (${rP.pressIter} vuelta(s)) y cuadra`);
 
+// ---------- desglose de máquinas (src/report.js)
+{
+  const Rep = require("../src/report.js");
+  const cfgN = Object.assign({}, cfg, {ext: {Desc_NitrogenGas_C: {wells: 2}}});
+  const cases = [["fase 5 optimizada con energía y pozos", cfgN, E.solveOpt(cfgN, plan({mode: "opt", energy: "gen"}), f5)],
+    ["fase 5 manual con energía y pozos", cfgN, E.solveManual(cfgN, plan({energy: "gen"}), f5)], ["fase 5 manual sin energía", cfg, E.solveManual(cfg, plan(), f5)]];
+  const csvParse = s => s.replace(/\r\n$/, "").split("\r\n").map(line => { const f = []; let cur = "", q = false;
+    for (let i = 0; i < line.length; i++) { const c = line[i]; if (q) { if (c === '"' && line[i + 1] === '"') { cur += '"'; i++; } else if (c === '"') q = false; else cur += c; } else if (c === '"') q = true; else if (c === ";") { f.push(cur); cur = ""; } else cur += c; }
+    f.push(cur); return f; });
+  const numCol = v => v === "" || /^-?\d+(,\d+)?$/.test(v);
+  for (const [lbl, c, res] of cases) {
+    const A = E.analyze(c, res), rep = Rep.breakdown(A, {db, lang: "es", cfg: c, engine: E});
+    const B = rep.sections.flatMap(s => s.buildings), L = B.flatMap(b => b.lines);
+    // 24) una línea por proceso con máquinas (+ una por fluido con Pressurizers); unidades del edificio = suma de sus líneas = recuento directo
+    const procs = A.rows.filter(r => r.build && r.p.building), press = A.energy.press.filter(p => p.wells);
+    const direct = {}; for (const r of procs) { const k = r.p.kind === "extract" ? r.p.bname.es : r.p.b.es; direct[k] = (direct[k] || 0) + r.build; }
+    for (const p of press) { const k = db.extractors.well.pressurizerName.es; direct[k] = (direct[k] || 0) + p.wells; }
+    ok(L.length === procs.length + press.length && B.every(b => b.units === b.lines.reduce((a, l) => a + l.units, 0) && b.units === direct[b.name]) && B.length === Object.keys(direct).length,
+      `desglose (${lbl}): una línea por receta y las unidades de cada edificio cuadran (${B.length} edificios, ${L.length} líneas)`);
+    // 25) totales: unidades, y MW de producción + extracción = consumo real de la pestaña Energía
+    const consB = rep.sections.filter(s => s.key !== "gen").flatMap(s => s.buildings).reduce((a, b) => a + b.mw, 0);
+    ok(rep.total.units === B.reduce((a, b) => a + b.units, 0) && near(consB, A.energy.cons, 1e-9) && near(rep.total.cons, A.energy.cons) && near(rep.total.gen, A.energy.gen),
+      `desglose (${lbl}): ${rep.total.units} máquinas; MW de producción y extracción = consumo (${A.energy.cons.toFixed(1)} MW)`);
+    // 26) secciones y orden: cada línea en su sección; edificios y líneas de más a menos unidades
+    const kinds = {prod: ["recipe"], ext: ["extract", "press"], gen: ["gen"]};
+    ok(rep.sections.every(s => s.buildings.every(b => b.lines.every(l => kinds[s.key].includes(l.kind)))) && rep.sections.every(s => s.buildings.every((b, i, a) => !i || a[i - 1].units >= b.units))
+      && B.every(b => b.lines.every((l, i, a) => !i || a[i - 1].units >= l.units)) && rep.sections.map(s => s.key).join() === ["prod", "ext", "gen"].filter(k => rep.sections.some(s => s.key === k)).join(),
+      `desglose (${lbl}): secciones ${rep.sections.map(s => s.title).join(", ")}; edificios y líneas ordenados por unidades`);
+    // 27) CSV: cabecera, una fila por línea, 13 columnas, números con coma decimal y sin BOM (el BOM solo va en la descarga)
+    const csv = Rep.csv(rep), rows = csvParse(csv);
+    ok(csv[0] !== "﻿" && rows[0].join() === Rep.CSV_COLS.join() && rows.length === L.length + 1 && rows.every(r => r.length === 13) && rows.slice(1).every(r => [5, 7, 8, 9, 10, 11, 12].every(k => numCol(r[k]))),
+      `CSV (${lbl}): ${rows.length - 1} filas de 13 columnas en formato español`);
+    // 28) Markdown: una sección por grupo, una tabla por edificio, 8 celdas por fila
+    const md = Rep.markdown(rep, "Fase 5"), mdRows = md.split("\n").filter(x => x.startsWith("| ") && !x.startsWith("| Sección") && !x.startsWith("| Producto"));
+    const cells = x => x.replace(/\\\\/g, "").split(/(?<!\\)\|/).length - 2;
+    ok((md.match(/^### /gm) || []).length === B.length && rep.sections.every(s => md.includes(`\n## ${s.title}\n`)) && (md.match(/^\| Producto \|/gm) || []).length === B.length
+      && mdRows.filter(x => cells(x) === 8).length === L.length + B.filter(b => b.lines.length > 1).length,
+      `Markdown (${lbl}): ${B.length} tablas, una por edificio`);
+  }
+  // 29) contenido: mezcla de recetas, generadores, Pressurizers y pureza de los extractores
+  const Ao = E.analyze(cfgN, cases[0][2]), ro = Rep.breakdown(Ao, {db, lang: "es", cfg: cfgN, engine: E}), Lo = ro.sections.flatMap(s => s.buildings.flatMap(b => b.lines));
+  const cnt = {}; for (const l of Lo) if (l.kind === "recipe") cnt[l.item] = (cnt[l.item] || 0) + 1;
+  const mixed = Object.keys(cnt).filter(i => cnt[i] > 1);
+  ok(mixed.length > 0, `optimizador: un producto con dos recetas sale en dos líneas (${mixed.map(i => db.items[i].es).join(", ")})`);
+  const Am = E.analyze(cfgN, cases[1][2]), rm = Rep.breakdown(Am, {db, lang: "es", cfg: cfgN, engine: E}), Lm = rm.sections.flatMap(s => s.buildings.flatMap(b => b.lines));
+  const pl = Lm.find(l => l.kind === "press"), gl = Lm.filter(l => l.kind === "gen"), wl = Lm.find(l => l.kind === "extract" && l.item === "Desc_Water_C"), ml = Lm.find(l => l.kind === "extract" && l.item === "Desc_OreIron_C");
+  ok(pl && pl.item === "Desc_NitrogenGas_C" && pl.recipe === "2 pozos" && pl.units === 2 && near(pl.mw, 300) && gl.length && gl.every(l => l.recipe === "→ Energía" && l.mw < 0 && l.item === "Desc_Coal_C")
+    && wl && wl.recipe === "–" && ml && ml.recipe === "Pureza normal", "líneas especiales: Pressurizers (2 pozos, 300 MW), generadores de carbón (+MW), agua sin pureza y mineral con la pureza configurada");
+  // 30) escapes y nombre de archivo
+  ok(Rep.mdCell("a|b\\c\nd") === "a\\|b\\\\c d" && Rep.csvCell("a;b") === '"a;b"' && Rep.csvCell('di "x"') === '"di ""x"""' && Rep.csvCell("ok") === "ok" && Rep.csvCell("1\n2") === '"1\n2"',
+    "escapes de Markdown (| y \\) y CSV (; comillas y saltos de línea)");
+  ok(Rep.fileName('  Fase 5: <hierro>/"acero"?*|\\  ', "md") === "Fase 5 hierroacero_maquinas.md" && Rep.fileName(" :/*?  ", "csv") === "fabrica_maquinas.csv" && Rep.fileName("", "md") === "fabrica_maquinas.md" && Rep.fileName(null, "csv") === "fabrica_maquinas.csv",
+    "nombre de archivo sin / \\ : * ? \" < > | ni espacios sobrantes; vacío -> «fabrica»");
+}
+
 // ---------- HTML generado
 // 22) Planificador.html al día con src/ y data/, sin errores de sintaxis (node --check) y arrancando en un DOM mínimo
 {
@@ -147,7 +202,7 @@ ok(!rP.error && rP.pressIter <= 12 && cohP && closes(AP), `Pressurizers: nítric
   const H = path.join(__dirname, ".."), html = fs.readFileSync(process.env.PLANIFICADOR_HTML || path.join(H, "Planificador.html"), "utf8");
   const dbM = html.match(/<script type="application\/json" id="db">([\s\S]*?)<\/script>/), jsM = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)];
   const js = jsM.map(m => m[1]).join("\n");
-  const src = ["engine.js", "glyphs.js", "sankey.js", "app.js"].map(f => fs.readFileSync(path.join(H, "src", f), "utf8")).join("\n").replace(/<\/script/g, "<\\/script");
+  const src = ["engine.js", "glyphs.js", "sankey.js", "report.js", "app.js"].map(f => fs.readFileSync(path.join(H, "src", f), "utf8")).join("\n").replace(/<\/script/g, "<\\/script");
   ok(dbM && jsM.length === 1 && js === src && JSON.stringify(JSON.parse(dbM[1])) === JSON.stringify(db), "Planificador.html está al día (ejecuta python build.py si falla)");
   const tmp = path.join(os.tmpdir(), `planificador_check_${process.pid}.js`);
   fs.writeFileSync(tmp, js);
@@ -181,6 +236,13 @@ ok(!rP.error && rP.pressIter <= 12 && cohP && closes(AP), `Pressurizers: nítric
   const b2 = boot(savedP), w2 = String(b2.els.warns && b2.els.warns.innerHTML);
   ok(!b2.err && !w2.includes("Pressurizers") && String(b2.els.kpis && b2.els.kpis.innerHTML).includes("Balance de energía") && String(b2.els.prod && b2.els.prod.innerHTML).length > 1000,
     "configuración guardada con _pressMax: se descarta y el plan se calcula" + (b2.err ? ` — ${b2.err.name}: ${b2.err.message}` : ""));
+  // 31) la pestaña Máquinas se pinta al arrancar en ella: edificios plegados, líneas ocultas, Pressurizers y total
+  const savedM = JSON.stringify({v: 2, cur: 0, tab: "mach", cfg: {clock: 1, ext: {Desc_NitrogenGas_C: {wells: 2}}},
+    plans: [{name: "m", targets: f5, sel: {}, rc: {}, mode: "manual", objective: "weighted", ban: {}, energy: "gen", gridMW: 0}]});
+  const b3 = boot(savedM), mh = String(b3.els.mach && b3.els.mach.innerHTML);
+  ok(!b3.err && (mh.match(/class="mb"/g) || []).length > 5 && (mh.match(/class="ml"[^>]* hidden/g) || []).length === (mh.match(/class="ml"/g) || []).length
+    && mh.includes(db.extractors.well.pressurizerName.es) && mh.includes("→ Energía") && mh.includes('class="tot"'),
+    "la pestaña Máquinas se pinta: edificios plegados con sus líneas, Pressurizers, generadores y total" + (b3.err ? ` — ${b3.err.name}: ${b3.err.message}` : ""));
 }
 console.log(fails ? `\n${fails} fallo(s)` : "\nTodo correcto");
 process.exitCode = fails ? 1 : 0;

@@ -95,7 +95,15 @@
       <div class="row" style="margin-top:8px"><button id="limMap">Límites = máximo del mapa</button><button id="limNone">Quitar límites</button></div>
       <p class="hint">El límite (si lo pones) se respeta al optimizar. Máximo del mapa: todos los nodos con Mk.3 al 250 % (mapa por defecto, sin nodos aleatorios de la 1.2). Pozos (Pressurizers): cuántos Resource Well usas para ese fluido; cada uno lleva un Pressurizer de 150 MW (con el reloj del extractor). Si lo dejas vacío, no se suman.</p>
     </div>
-    <div id="v-mach" hidden><div class="scroll"><table id="mach"></table></div><p class="hint" id="machNote"></p></div>
+    <div id="v-mach" hidden>
+      <div class="row mbar"><button id="mOpen" type="button">Desplegar todo</button><button id="mClose" type="button">Plegar todo</button>
+        <div class="row mexp"><label>Formato<select id="mFmt"><option value="md">Markdown</option><option value="csv">CSV</option></select></label>
+          <button id="mCopy" type="button">Copiar</button><button id="mDl" type="button">Descargar</button></div></div>
+      <div class="scroll"><table id="mach" class="mach"></table></div>
+      <p class="hint" id="machNote"></p>
+      <p class="hint">Despliega un edificio para ver para qué se usa: una línea por receta (si el optimizador mezcla dos recetas para el mismo producto, salen las dos). En los extractores, la pureza es la configurada en Extracción para ese recurso, no un recuento de nodos reales. Con varias líneas, el total redondea cada línea hacia arriba.</p>
+      <textarea id="mOut" hidden readonly aria-label="Desglose exportado"></textarea>
+    </div>
     <div id="v-energy" hidden>
       <div class="esum" id="esum"></div>
       <p class="hint" id="enote"></p>

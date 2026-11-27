@@ -1,4 +1,4 @@
-// Interfaz del planificador. Depende de Engine, Glyphs y Sankey.
+// Interfaz del planificador. Depende de Engine, Glyphs, Sankey y Report.
 {
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
@@ -229,14 +229,61 @@ function renderTree(plan, A) {
   const t = Object.entries(A.d).filter(([, v]) => v > 0);
   $("tree").innerHTML = t.length ? `<ul>${t.map(([i, v]) => node(i, v, [], 0)).join("")}</ul>` : `<p class="hint">Sin objetivos.</p>`;
 }
+// ---------- máquinas: desglose por edificio y receta (src/report.js)
+const machOpen = new Set();  // edificios desplegados ("sección|edificio"); vive en memoria, no se guarda
+const machReport = A => Report.breakdown(A, {db: DB, lang: S.lang, cfg: S.cfg, engine: Engine});
+const LINES = {recipe: ["receta", "recetas"], extract: ["recurso", "recursos"], gen: ["combustible", "combustibles"], press: ["fluido", "fluidos"]};
 function renderMach(plan, A) {
-  const by = machinesBy(A);
-  const e = Object.entries(by).sort((a, b) => b[1].n - a[1].n), tot = k => e.reduce((a, [, v]) => a + v[k], 0);
-  const mw = v => v.p < 0 ? `<span class="ok" title="Genera">+${nf(-v.p, 1)}</span>` : nf(v.p, 1);
-  $("mach").innerHTML = `<thead><tr><th>Máquina</th><th class="n">Unidades</th><th class="n">MW</th><th class="n">Fragmentos</th><th class="n">Somersloops</th></tr></thead><tbody>` +
-    e.map(([k, v]) => `<tr><td>${esc(k)}</td><td class="n">${nf(v.n, 0)}</td><td class="n">${mw(v)}</td><td class="n">${nf(v.s, 0)}</td><td class="n">${nf(v.l, 0)}</td></tr>`).join("") +
-    `<tr class="tot"><td>Total</td><td class="n">${nf(tot("n"), 0)}</td><td class="n">${nf(A.energy.cons, 1)}</td><td class="n">${nf(tot("s"), 0)}</td><td class="n">${nf(tot("l"), 0)}</td></tr></tbody>`;
+  const rep = machReport(A), t = rep.total;
+  const mw = v => v < 0 ? `<span class="ok" title="Genera">+${nf(-v, 1)}</span>` : nf(v, 1);
+  const PUR = ` title="Pureza configurada en Extracción para este recurso; no es un recuento de nodos reales"`;
+  let h = "";
+  for (const s of rep.sections) {
+    h += `<tbody><tr class="grp"><td colspan="8">${esc(s.title)}</td></tr>`;
+    for (const b of s.buildings) {
+      const k = s.key + "|" + b.name, open = machOpen.has(k), n = b.lines.length, lw = LINES[b.lines[0].kind];
+      h += `<tr class="mb"><td><button type="button" class="tgl" data-act="mtgl" data-k="${esc(k)}" aria-expanded="${open}">${esc(b.name)}</button></td>
+        <td class="m">${n} ${lw[n === 1 ? 0 : 1]}</td><td></td><td class="n"><b>${nf(b.units, 0)}</b></td><td></td>
+        <td class="n">${nf(b.shards, 0)}</td><td class="n">${nf(b.sloops, 0)}</td><td class="n">${mw(b.mw)}</td></tr>`;
+      for (const l of b.lines) h += `<tr class="ml" data-k="${esc(k)}"${open ? "" : " hidden"}>
+        <td><div class="obj">${ic(l.item)}<b>${esc(l.product)}</b></div></td>
+        <td class="${l.alt ? "alt" : ""}"${l.kind === "extract" && l.purity ? PUR : ""}>${esc((l.alt ? "Alt: " : "") + l.recipe)}</td>
+        <td class="n">${l.rate === null ? "–" : nf(l.rate) + `<span class="u">${esc(l.unit)}</span>`}</td><td class="n">${nf(l.units, 0)}</td>
+        <td class="n">${nf(l.uclock * 100, 1)} %</td><td class="n">${nf(l.shards, 0)}</td><td class="n">${nf(l.sloops, 0)}</td><td class="n">${mw(l.mw)}</td></tr>`;
+    }
+    h += "</tbody>";
+  }
+  $("mach").innerHTML = `<thead><tr><th>Edificio / producto</th><th>Receta</th><th class="n">Producción</th><th class="n">Unidades</th><th class="n">Reloj real</th><th class="n">Fragm.</th><th class="n">Somersloops</th><th class="n">MW</th></tr></thead>` +
+    (h ? h + `<tbody><tr class="tot"><td>Total</td><td></td><td></td><td class="n">${nf(t.units, 0)}</td><td></td><td class="n">${nf(t.shards, 0)}</td><td class="n">${nf(t.sloops, 0)}</td><td class="n">${nf(t.cons, 1)}</td></tr></tbody>`
+      : `<tbody><tr><td colspan="8" class="m">Sin máquinas: añade objetivos.</td></tr></tbody>`);
+  for (const id of ["mOpen", "mClose", "mCopy", "mDl"]) $(id).disabled = !h;
   $("machNote").textContent = (A.energy.gen ? "El total de MW es el consumo; los generadores aparecen con su producción (+). " : "") + (A.energy.missingWells.length ? missingWellsText(A) : "");
+}
+// desplegar/plegar sin volver a pintar (no pasa por set(): no es un cambio del plan)
+function machToggle(keys, open) {
+  for (const k of keys) { if (open) machOpen.add(k); else machOpen.delete(k); }
+  for (const b of $("mach").querySelectorAll("button.tgl")) if (keys.includes(b.dataset.k)) b.setAttribute("aria-expanded", open);
+  for (const tr of $("mach").querySelectorAll("tr.ml")) if (keys.includes(tr.dataset.k)) tr.hidden = !open;
+}
+// exportar: el texto queda siempre en el cuadro (por si el navegador bloquea el portapapeles o la descarga)
+function machExport(how, btn) {
+  const fmt = $("mFmt").value, rep = machReport(compute()), name = P().name;
+  const txt = fmt === "csv" ? Report.csv(rep) : Report.markdown(rep, name), box = $("mOut");
+  box.hidden = false; box.value = txt; box.select();
+  const say = m => { btn.textContent = m; setTimeout(() => { btn.textContent = how === "copy" ? "Copiar" : "Descargar"; }, 2200); };
+  if (how === "copy") {
+    const legacy = () => { try { box.select(); return document.execCommand("copy"); } catch (e) { return false; } };
+    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(txt).then(() => say("Copiado"), () => say(legacy() ? "Copiado" : "Cópialo del cuadro"));
+    else say(legacy() ? "Copiado" : "Cópialo del cuadro");
+  } else {
+    try {
+      const a2 = document.createElement("a");
+      a2.href = URL.createObjectURL(new Blob([fmt === "csv" ? "﻿" + txt : txt], {type: fmt === "csv" ? "text/csv;charset=utf-8" : "text/markdown;charset=utf-8"}));
+      a2.download = Report.fileName(name, fmt); document.body.append(a2); a2.click(); a2.remove(); setTimeout(() => URL.revokeObjectURL(a2.href), 4000);
+      // dentro de un marco (p. ej. una web que lo incrusta) el navegador puede bloquear la descarga sin avisar
+      say(window.self !== window.top ? "Si no baja, cópialo del cuadro" : "Descargado");
+    } catch (e) { say("Cópialo del cuadro"); }
+  }
 }
 // ---------- energía
 function machinesBy(A) {
@@ -355,6 +402,9 @@ document.addEventListener("click", e => {
     set(() => { S.plans.splice(S.cur, 1); S.cur = Math.max(0, S.cur - 1); });
   }
   else if (t.id === "undo") undo();
+  else if (a === "mtgl") machToggle([t.dataset.k], t.getAttribute("aria-expanded") !== "true");
+  else if (t.id === "mOpen" || t.id === "mClose") machToggle([...$("mach").querySelectorAll("button.tgl")].map(b => b.dataset.k), t.id === "mOpen");
+  else if (t.id === "mCopy" || t.id === "mDl") machExport(t.id === "mCopy" ? "copy" : "dl", t);
   else if (t.id === "limMap") set(() => { for (const [k, v] of Object.entries(DB.world)) S.cfg.limits[k] = v; });
   else if (t.id === "limNone") set(() => { S.cfg.limits = {}; });
   else if (t.id === "altAll") set(() => { S.cfg.locked = {}; });

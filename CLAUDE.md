@@ -16,13 +16,14 @@ Planificador de fábricas para **Satisfactory 1.x**: dado un conjunto de piezas 
 
 ```
 Planificador.html          ← GENERADO por build.py (no editar a mano)
-build.py                   ← une src/*.js + styles.css + template + data → Planificador.html
+build.py                   ← une src/*.js + styles.css + template + data → Planificador.html (orden: engine, glyphs, sankey, report, app)
 data/satisfactory_db.json  ← GENERADO por tools/docs_to_db.py desde los Docs del juego
 src/
   engine.js                ← motor: procesos, solver manual, simplex, análisis (sin DOM; corre en Node)
   glyphs.js                ← glifos SVG propios por familia de objeto + color por materias primas
   sankey.js                ← diagrama de flujo sin dependencias
-  app.js                   ← estado, render, eventos (depende de Engine, Glyphs, Sankey)
+  report.js                ← desglose de máquinas por edificio y receta + exportación Markdown/CSV (sin DOM; corre en Node)
+  app.js                   ← estado, render, eventos (depende de Engine, Glyphs, Sankey, Report)
   styles.css, index.template.html
 tools/
   docs_to_db.py            ← parser de CommunityResources/Docs/{en-US,es-ES}.json (UTF-16)
@@ -106,6 +107,10 @@ Flujo obligatorio tras cambiar código: `python build.py` → `node tests/test_e
 - **Seguridad:** todo texto que venga de datos se escapa con `esc()` antes de entrar en HTML.
 - **Iconos:** si existe `icons/Desc_IronPlate_C.png`, se usan PNG del juego; cada `<img>` que falle se sustituye por su glifo (listener de `error` en captura). La comprobación solo se hace con `location.protocol === "file:"`: en la web no hay iconos (copyright) y daría un 404 en consola.
 - **Tema:** sigue al sistema (`color-scheme: light dark` + `light-dark()`). `styles.css` ya tiene reglas `:root[data-theme=light|dark]`, pero nada las activa todavía (ver «Pendiente»).
+- **Pestaña Máquinas (desglose):** `Report.breakdown(A, {db, lang, cfg, engine})` agrupa las filas de `analyze` con máquinas en tres secciones: Producción (recetas), Extracción (extractores + Pressurizers como un edificio más, una línea por fluido, unidades = pozos) y Energía (generadores; producto = combustible, «→ Energía», MW en negativo = generan). Una línea por proceso: si el optimizador mezcla recetas para un producto, salen varias. Edificios y líneas, de más a menos unidades. En los extractores, la «receta» es la pureza configurada en Extracción (no un recuento de nodos; tooltip y nota en la pestaña). Total MW = consumo real (`energy.cons`).
+  - Una sola tabla (columnas alineadas): fila de edificio con botón `.tgl` (`aria-expanded`) y filas `.ml` con `hidden`. El estado desplegado vive en `machOpen` (memoria, no se guarda ni pasa por `set()`): desplegar no repinta.
+  - **Exportación** (`Report.markdown` / `Report.csv`): el texto va siempre al cuadro `#mOut` (respaldo si el navegador bloquea portapapeles o descarga; dentro de un marco, el botón lo advierte porque la descarga puede fallar sin aviso). Markdown: una tabla por edificio + resumen; números como en la interfaz (es-ES). CSV en formato español: `;`, coma decimal, sin miles, `\r\n`, una fila por línea sin totales; el BOM solo se añade a la descarga (para Excel), no al copiar. Nombre de archivo: `Report.fileName()` quita `/ \ : * ? " < > |` y caracteres de control y recorta; vacío → «fabrica».
+  - `machinesBy()` sigue alimentando la tabla de consumo de la pestaña Energía.
 - **Sankey:** niveles = `Engine.depths()` (camino más largo, seguro ante ciclos). Iterar sobre los enlaces disparaba el ancho a más de 11.000 px con bucles de reciclaje.
 - **Energía en la interfaz:** bloque «Energía» en Cálculo (modo y energía externa); en manual, la fila «Energía» de Producción elige generador y combustible. Pestaña **Energía**: resumen, generadores (combustible, agua, residuos) y consumo por máquina con Pressurizers. `Power_MW` no se dibuja como flujo hacia cada máquina (Sankey y Árbol lo omiten, `depths()` lo ignora); en el Sankey, combustible y agua van a un nodo «Energía» rotulado con los MW. No sale en Excedentes.
 - **Avisos de energía:** residuos nucleares sin destino (siempre) y pozos sin indicar (en la cabecera solo con «generar»; con «solo informar», en Máquinas y Energía).
@@ -139,7 +144,7 @@ Flujo obligatorio tras cambiar código: `python build.py` → `node tests/test_e
 4. **Sankey:** más legible en fábricas grandes (agrupar nodos pequeños, zoom/arrastre, resaltar un objeto al pasar el ratón).
 5. **Iconos:** probar una extracción automática por línea de comandos (p. ej. herramientas .NET basadas en CUE4Parse) como alternativa a FModel.
 6. **Selector de tema:** claro / oscuro / sistema, guardado en el estado y aplicado con `data-theme` en `<html>` (las reglas CSS ya existen).
-7. **Otros:** filtro de recetas por tier/hito desbloqueado; exportar la lista de construcción (CSV/Markdown); comparar dos fábricas.
+7. **Otros:** filtro de recetas por tier/hito desbloqueado; comparar dos fábricas.
 
 ## Historia breve
 
@@ -147,5 +152,6 @@ Flujo obligatorio tras cambiar código: `python build.py` → `node tests/test_e
 - **v1 HTML:** datos de la wiki transcritos, solver manual.
 - **Preparación del repositorio público (v2.1.0, 11/2026):** `README.md`, `LICENSE` MIT, avisos, créditos, nombre visible nuevo y finales de línea LF.
 - **Energía (11/2026, `feature/energia`):** generadores con combustible como recetas, `Power_MW`, modo «generar», energía externa, Pressurizers por pozos con reparto proporcional, pestaña Energía. Límite del punto fijo con error `"press"` y comprobación automática del HTML generado. HiGHS: 227 casos, 0 discrepancias.
+- **Desglose de máquinas (11/2026, `feature/desglose-maquinas`):** pestaña Máquinas por edificio y receta, desplegable, con exportación a Markdown y CSV (`src/report.js`).
 - **v2 (actual):** datos de los Docs del juego, optimizador lineal validado con HiGHS (177 casos, error relativo máximo 3e-14), Somersloops, varias fábricas, alternativas desbloqueables, Sankey, glifos, ES/EN.
 - **Versión publicada en claude.ai:** existió como página privada de pruebas y se eliminó el 25/11/2026. La referencia es este repositorio.
