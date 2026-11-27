@@ -112,6 +112,16 @@ tr.imp td:first-child{box-shadow:inset 4px 0 var(--mute)}
 .esum span{font-size:13px;color:var(--mute)}
 .esum .pos{border-color:var(--ok)}.esum .neg{border-color:var(--warn)}
 .m{color:var(--mute);font-size:13px}
+.mbar{margin-bottom:10px}
+.mexp{margin-left:auto}
+.mach .tgl{display:flex;align-items:center;gap:6px;width:100%;min-height:34px;padding:2px 4px 2px 0;background:none;border:0;border-radius:0;color:var(--ink);font:700 15px/1.2 Barlow,sans-serif;text-align:left}
+.mach .tgl::before{content:"▸";flex:none;width:1em;color:var(--orT)}
+.mach .tgl[aria-expanded=true]::before{content:"▾"}
+.mach tr.mb td{border-top:1px solid color-mix(in srgb,var(--ink) 25%,transparent)}
+.mach tr.ml td{background:var(--soft)}
+.mach tr.ml td:first-child{padding-left:26px}
+.mach .obj{display:flex;gap:7px;align-items:center;min-width:11em}
+.mach .obj b{font-weight:500}
 #sk{display:block;min-height:360px}
 #sk .sk{font:13px Barlow,sans-serif;fill:var(--ink);paint-order:stroke;stroke:var(--panel);stroke-width:3px}
 #sk .skv{fill:var(--mute);font-variant-numeric:tabular-nums}
@@ -221,7 +231,15 @@ footer{color:var(--mute);font-size:13px;text-align:center;padding:0 16px 24px}
       <div class="row" style="margin-top:8px"><button id="limMap">Límites = máximo del mapa</button><button id="limNone">Quitar límites</button></div>
       <p class="hint">El límite (si lo pones) se respeta al optimizar. Máximo del mapa: todos los nodos con Mk.3 al 250 % (mapa por defecto, sin nodos aleatorios de la 1.2). Pozos (Pressurizers): cuántos Resource Well usas para ese fluido; cada uno lleva un Pressurizer de 150 MW (con el reloj del extractor). Si lo dejas vacío, no se suman.</p>
     </div>
-    <div id="v-mach" hidden><div class="scroll"><table id="mach"></table></div><p class="hint" id="machNote"></p></div>
+    <div id="v-mach" hidden>
+      <div class="row mbar"><button id="mOpen" type="button">Desplegar todo</button><button id="mClose" type="button">Plegar todo</button>
+        <div class="row mexp"><label>Formato<select id="mFmt"><option value="md">Markdown</option><option value="csv">CSV</option></select></label>
+          <button id="mCopy" type="button">Copiar</button><button id="mDl" type="button">Descargar</button></div></div>
+      <div class="scroll"><table id="mach" class="mach"></table></div>
+      <p class="hint" id="machNote"></p>
+      <p class="hint">Despliega un edificio para ver para qué se usa: una línea por receta (si el optimizador mezcla dos recetas para el mismo producto, salen las dos). En los extractores, la pureza es la configurada en Extracción para ese recurso, no un recuento de nodos reales. Con varias líneas, el total redondea cada línea hacia arriba.</p>
+      <textarea id="mOut" hidden readonly aria-label="Desglose exportado"></textarea>
+    </div>
     <div id="v-energy" hidden>
       <div class="esum" id="esum"></div>
       <p class="hint" id="enote"></p>
@@ -748,7 +766,101 @@ const Sankey = (() => {
 })();
 if (typeof module !== "undefined") module.exports = Sankey;
 
-// Interfaz del planificador. Depende de Engine, Glyphs y Sankey.
+// Desglose de máquinas por edificio y receta, y su exportación a Markdown y CSV.
+// Sin DOM: se ejecuta igual en el navegador y en Node (tests). Trabaja sobre el resultado de Engine.analyze().
+const Report = (() => {
+  const POWER = "Power_MW";
+  const PURITY = {Impure: "impura", Normal: "normal", Pure: "pura"};
+  const SECTIONS = [["prod", "Producción"], ["ext", "Extracción"], ["gen", "Energía"]];
+
+  // o = {db, lang, cfg, engine}
+  function breakdown(A, o) {
+    const {db, lang, cfg, engine} = o;
+    const nm = id => (db.items[id] || {})[lang] || (db.items[id] || {}).en || id;
+    const unit = id => id === POWER ? "MW" : db.items[id] && (db.items[id].form === "liquid" || db.items[id].form === "gas") ? "m³/min" : "/min";
+    const B = {prod: {}, ext: {}, gen: {}};
+    const add = (sec, name, line) => {
+      const b = B[sec][name] || (B[sec][name] = {name, units: 0, mw: 0, shards: 0, sloops: 0, lines: []});
+      b.units += line.units; b.mw += line.mw; b.shards += line.shards; b.sloops += line.sloops; b.lines.push(line);
+    };
+    for (const r of A.rows) {
+      if (!r.build || !r.p.building) continue;
+      const p = r.p, base = {item: p.item, rate: r.rate, unit: unit(p.item), x: r.x, units: r.build, uclock: r.uclock, shards: r.shards, sloops: r.sloops, mw: r.power, alt: false};
+      if (p.kind === "extract") {
+        const ex = db.extractors[p.ext] || {}, pur = ex.purity === false ? null : engine.extCfg(cfg, p.item).purity;
+        add("ext", p.bname[lang] || p.bname.en, Object.assign(base, {kind: "extract", product: nm(p.item), recipe: pur ? "Pureza " + (PURITY[pur] || pur) : "–", purity: pur}));
+      } else if (p.b.generator) {
+        // generador: el producto es el combustible; produce MW
+        const fuel = Object.keys(p.recipe.in).find(k => k !== "Desc_Water_C") || Object.keys(p.recipe.in)[0];
+        add("gen", p.b[lang] || p.b.en, Object.assign(base, {kind: "gen", item: fuel, product: nm(fuel), recipe: "→ Energía", unit: "MW"}));
+      } else {
+        add("prod", p.b[lang] || p.b.en, Object.assign(base, {kind: "recipe", product: nm(p.item), recipe: p.recipe[lang] || p.recipe.en, alt: !!p.recipe.alt}));
+      }
+    }
+    // Pressurizers: un «edificio» más en Extracción, una línea por fluido; las unidades son los pozos
+    const pn = (db.extractors.well || {}).pressurizerName || {en: "Resource Well Pressurizer"};
+    for (const pz of (A.energy || {}).press || []) if (pz.wells)
+      add("ext", pn[lang] || pn.en, {kind: "press", item: pz.item, product: nm(pz.item), recipe: pz.wells + (pz.wells === 1 ? " pozo" : " pozos"), alt: false,
+        rate: null, unit: "", x: pz.wells, units: pz.wells, uclock: pz.clock, shards: pz.wells * engine.shards(pz.clock), sloops: 0, mw: pz.power});
+    const byUnits = (a, b) => b.units - a.units || a.name.localeCompare(b.name);
+    const sections = SECTIONS.map(([key, title]) => ({key, title, buildings: Object.values(B[key]).sort(byUnits)})).filter(s => s.buildings.length);
+    for (const s of sections) for (const b of s.buildings) b.lines.sort((x, y) => y.units - x.units || x.product.localeCompare(y.product) || x.recipe.localeCompare(y.recipe));
+    const all = sections.flatMap(s => s.buildings), sum = k => all.reduce((a, b) => a + b[k], 0);
+    const E = A.energy || {};
+    return {sections, total: {units: sum("units"), shards: sum("shards"), sloops: sum("sloops"), cons: E.cons || 0, gen: E.gen || 0}};
+  }
+
+  // ---------- formato
+  const NF = {};
+  const nf = (v, d = 2) => {
+    if (!NF[d]) { try { NF[d] = new Intl.NumberFormat("es-ES", {maximumFractionDigits: d, useGrouping: "always"}); } catch (e) { NF[d] = new Intl.NumberFormat("es-ES", {maximumFractionDigits: d}); } }
+    return NF[d].format(Math.abs(v) < 5e-7 ? 0 : v);
+  };
+  // CSV en formato español: coma decimal, sin separador de miles
+  const num = (v, d = 4) => { if (v === null || v === undefined || !isFinite(v)) return ""; const r = Math.round(v * 10 ** d) / 10 ** d; return String(Object.is(r, -0) ? 0 : r).replace(".", ","); };
+  const mdCell = s => String(s ?? "").replace(/\\/g, "\\\\").replace(/\|/g, "\\|").replace(/\r?\n/g, " ");
+  const csvCell = s => { s = String(s ?? ""); return /[";\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
+  const mwTxt = v => v < 0 ? "+" + nf(-v, 1) : nf(v, 1);
+  const rateTxt = l => l.rate === null ? "–" : nf(l.rate) + " " + l.unit;
+  const recTxt = l => (l.alt ? "Alt: " : "") + l.recipe;
+
+  function markdown(rep, title) {
+    const H = "| Producto | Receta | Producción | Unidades | Reloj real | Fragm. | Somersloops | MW |\n|---|---|--:|--:|--:|--:|--:|--:|";
+    const t = rep.total, out = [`# Desglose de máquinas: ${mdCell(title)}`, "",
+      `${nf(t.units, 0)} máquinas · consumo ${nf(t.cons, 1)} MW` + (t.gen ? ` · generación ${nf(t.gen, 1)} MW` : "") + ` · ${nf(t.shards, 0)} fragmentos · ${nf(t.sloops, 0)} Somersloops`];
+    for (const s of rep.sections) {
+      out.push("", `## ${s.title}`);
+      for (const b of s.buildings) {
+        out.push("", `### ${mdCell(b.name)}: ${nf(b.units, 0)} unidades · ${mwTxt(b.mw)} MW`, "", H);
+        for (const l of b.lines) out.push(`| ${mdCell(l.product)} | ${mdCell(recTxt(l))} | ${rateTxt(l)} | ${nf(l.units, 0)} | ${nf(l.uclock * 100, 1)} % | ${nf(l.shards, 0)} | ${nf(l.sloops, 0)} | ${mwTxt(l.mw)} |`);
+        if (b.lines.length > 1) out.push(`| **Total** | | | **${nf(b.units, 0)}** | | ${nf(b.shards, 0)} | ${nf(b.sloops, 0)} | ${mwTxt(b.mw)} |`);
+      }
+    }
+    out.push("", "## Resumen", "", "| Sección | Edificio | Unidades | MW | Fragm. | Somersloops |", "|---|---|--:|--:|--:|--:|");
+    for (const s of rep.sections) for (const b of s.buildings) out.push(`| ${s.title} | ${mdCell(b.name)} | ${nf(b.units, 0)} | ${mwTxt(b.mw)} | ${nf(b.shards, 0)} | ${nf(b.sloops, 0)} |`);
+    out.push(`| **Total** | | **${nf(t.units, 0)}** | ${nf(t.cons, 1)} | ${nf(t.shards, 0)} | ${nf(t.sloops, 0)} |`, "",
+      "MW: consumo; los generadores llevan «+» (producen). El MW total es el consumo de la fábrica.");
+    if (rep.sections.some(s => s.buildings.some(b => b.lines.some(l => l.kind === "extract" && l.purity))))
+      out.push("Pureza de los extractores: la configurada en Extracción para cada recurso, no un recuento de nodos reales.");
+    return out.join("\n") + "\n";
+  }
+
+  const CSV_COLS = ["Sección", "Edificio", "Producto", "Receta", "Alternativa", "Producción", "Unidad", "Máquinas exactas", "Unidades", "Reloj real %", "Fragmentos", "Somersloops", "MW"];
+  function csv(rep) {
+    const rows = [CSV_COLS];
+    for (const s of rep.sections) for (const b of s.buildings) for (const l of b.lines)
+      rows.push([s.title, b.name, l.product, l.recipe, l.alt ? "sí" : "no", num(l.rate), l.unit, num(l.x), l.units, num(l.uclock * 100, 2), l.shards, l.sloops, num(l.mw, 2)]);
+    return rows.map(r => r.map(csvCell).join(";")).join("\r\n") + "\r\n";
+  }
+
+  // nombre de archivo: sin / \ : * ? " < > | ni caracteres de control; vacío -> «fabrica»
+  const fileName = (name, ext) => (String(name ?? "").replace(/[\/\\:*?"<>|\x00-\x1f]/g, "").trim() || "fabrica") + "_maquinas." + ext;
+
+  return {breakdown, markdown, csv, fileName, mdCell, csvCell, CSV_COLS};
+})();
+if (typeof module !== "undefined") module.exports = Report;
+
+// Interfaz del planificador. Depende de Engine, Glyphs, Sankey y Report.
 {
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
@@ -979,14 +1091,61 @@ function renderTree(plan, A) {
   const t = Object.entries(A.d).filter(([, v]) => v > 0);
   $("tree").innerHTML = t.length ? `<ul>${t.map(([i, v]) => node(i, v, [], 0)).join("")}</ul>` : `<p class="hint">Sin objetivos.</p>`;
 }
+// ---------- máquinas: desglose por edificio y receta (src/report.js)
+const machOpen = new Set();  // edificios desplegados ("sección|edificio"); vive en memoria, no se guarda
+const machReport = A => Report.breakdown(A, {db: DB, lang: S.lang, cfg: S.cfg, engine: Engine});
+const LINES = {recipe: ["receta", "recetas"], extract: ["recurso", "recursos"], gen: ["combustible", "combustibles"], press: ["fluido", "fluidos"]};
 function renderMach(plan, A) {
-  const by = machinesBy(A);
-  const e = Object.entries(by).sort((a, b) => b[1].n - a[1].n), tot = k => e.reduce((a, [, v]) => a + v[k], 0);
-  const mw = v => v.p < 0 ? `<span class="ok" title="Genera">+${nf(-v.p, 1)}</span>` : nf(v.p, 1);
-  $("mach").innerHTML = `<thead><tr><th>Máquina</th><th class="n">Unidades</th><th class="n">MW</th><th class="n">Fragmentos</th><th class="n">Somersloops</th></tr></thead><tbody>` +
-    e.map(([k, v]) => `<tr><td>${esc(k)}</td><td class="n">${nf(v.n, 0)}</td><td class="n">${mw(v)}</td><td class="n">${nf(v.s, 0)}</td><td class="n">${nf(v.l, 0)}</td></tr>`).join("") +
-    `<tr class="tot"><td>Total</td><td class="n">${nf(tot("n"), 0)}</td><td class="n">${nf(A.energy.cons, 1)}</td><td class="n">${nf(tot("s"), 0)}</td><td class="n">${nf(tot("l"), 0)}</td></tr></tbody>`;
+  const rep = machReport(A), t = rep.total;
+  const mw = v => v < 0 ? `<span class="ok" title="Genera">+${nf(-v, 1)}</span>` : nf(v, 1);
+  const PUR = ` title="Pureza configurada en Extracción para este recurso; no es un recuento de nodos reales"`;
+  let h = "";
+  for (const s of rep.sections) {
+    h += `<tbody><tr class="grp"><td colspan="8">${esc(s.title)}</td></tr>`;
+    for (const b of s.buildings) {
+      const k = s.key + "|" + b.name, open = machOpen.has(k), n = b.lines.length, lw = LINES[b.lines[0].kind];
+      h += `<tr class="mb"><td><button type="button" class="tgl" data-act="mtgl" data-k="${esc(k)}" aria-expanded="${open}">${esc(b.name)}</button></td>
+        <td class="m">${n} ${lw[n === 1 ? 0 : 1]}</td><td></td><td class="n"><b>${nf(b.units, 0)}</b></td><td></td>
+        <td class="n">${nf(b.shards, 0)}</td><td class="n">${nf(b.sloops, 0)}</td><td class="n">${mw(b.mw)}</td></tr>`;
+      for (const l of b.lines) h += `<tr class="ml" data-k="${esc(k)}"${open ? "" : " hidden"}>
+        <td><div class="obj">${ic(l.item)}<b>${esc(l.product)}</b></div></td>
+        <td class="${l.alt ? "alt" : ""}"${l.kind === "extract" && l.purity ? PUR : ""}>${esc((l.alt ? "Alt: " : "") + l.recipe)}</td>
+        <td class="n">${l.rate === null ? "–" : nf(l.rate) + `<span class="u">${esc(l.unit)}</span>`}</td><td class="n">${nf(l.units, 0)}</td>
+        <td class="n">${nf(l.uclock * 100, 1)} %</td><td class="n">${nf(l.shards, 0)}</td><td class="n">${nf(l.sloops, 0)}</td><td class="n">${mw(l.mw)}</td></tr>`;
+    }
+    h += "</tbody>";
+  }
+  $("mach").innerHTML = `<thead><tr><th>Edificio / producto</th><th>Receta</th><th class="n">Producción</th><th class="n">Unidades</th><th class="n">Reloj real</th><th class="n">Fragm.</th><th class="n">Somersloops</th><th class="n">MW</th></tr></thead>` +
+    (h ? h + `<tbody><tr class="tot"><td>Total</td><td></td><td></td><td class="n">${nf(t.units, 0)}</td><td></td><td class="n">${nf(t.shards, 0)}</td><td class="n">${nf(t.sloops, 0)}</td><td class="n">${nf(t.cons, 1)}</td></tr></tbody>`
+      : `<tbody><tr><td colspan="8" class="m">Sin máquinas: añade objetivos.</td></tr></tbody>`);
+  for (const id of ["mOpen", "mClose", "mCopy", "mDl"]) $(id).disabled = !h;
   $("machNote").textContent = (A.energy.gen ? "El total de MW es el consumo; los generadores aparecen con su producción (+). " : "") + (A.energy.missingWells.length ? missingWellsText(A) : "");
+}
+// desplegar/plegar sin volver a pintar (no pasa por set(): no es un cambio del plan)
+function machToggle(keys, open) {
+  for (const k of keys) { if (open) machOpen.add(k); else machOpen.delete(k); }
+  for (const b of $("mach").querySelectorAll("button.tgl")) if (keys.includes(b.dataset.k)) b.setAttribute("aria-expanded", open);
+  for (const tr of $("mach").querySelectorAll("tr.ml")) if (keys.includes(tr.dataset.k)) tr.hidden = !open;
+}
+// exportar: el texto queda siempre en el cuadro (por si el navegador bloquea el portapapeles o la descarga)
+function machExport(how, btn) {
+  const fmt = $("mFmt").value, rep = machReport(compute()), name = P().name;
+  const txt = fmt === "csv" ? Report.csv(rep) : Report.markdown(rep, name), box = $("mOut");
+  box.hidden = false; box.value = txt; box.select();
+  const say = m => { btn.textContent = m; setTimeout(() => { btn.textContent = how === "copy" ? "Copiar" : "Descargar"; }, 2200); };
+  if (how === "copy") {
+    const legacy = () => { try { box.select(); return document.execCommand("copy"); } catch (e) { return false; } };
+    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(txt).then(() => say("Copiado"), () => say(legacy() ? "Copiado" : "Cópialo del cuadro"));
+    else say(legacy() ? "Copiado" : "Cópialo del cuadro");
+  } else {
+    try {
+      const a2 = document.createElement("a");
+      a2.href = URL.createObjectURL(new Blob([fmt === "csv" ? "﻿" + txt : txt], {type: fmt === "csv" ? "text/csv;charset=utf-8" : "text/markdown;charset=utf-8"}));
+      a2.download = Report.fileName(name, fmt); document.body.append(a2); a2.click(); a2.remove(); setTimeout(() => URL.revokeObjectURL(a2.href), 4000);
+      // dentro de un marco (p. ej. una web que lo incrusta) el navegador puede bloquear la descarga sin avisar
+      say(window.self !== window.top ? "Si no baja, cópialo del cuadro" : "Descargado");
+    } catch (e) { say("Cópialo del cuadro"); }
+  }
 }
 // ---------- energía
 function machinesBy(A) {
@@ -1105,6 +1264,9 @@ document.addEventListener("click", e => {
     set(() => { S.plans.splice(S.cur, 1); S.cur = Math.max(0, S.cur - 1); });
   }
   else if (t.id === "undo") undo();
+  else if (a === "mtgl") machToggle([t.dataset.k], t.getAttribute("aria-expanded") !== "true");
+  else if (t.id === "mOpen" || t.id === "mClose") machToggle([...$("mach").querySelectorAll("button.tgl")].map(b => b.dataset.k), t.id === "mOpen");
+  else if (t.id === "mCopy" || t.id === "mDl") machExport(t.id === "mCopy" ? "copy" : "dl", t);
   else if (t.id === "limMap") set(() => { for (const [k, v] of Object.entries(DB.world)) S.cfg.limits[k] = v; });
   else if (t.id === "limNone") set(() => { S.cfg.limits = {}; });
   else if (t.id === "altAll") set(() => { S.cfg.locked = {}; });

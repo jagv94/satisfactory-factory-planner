@@ -104,6 +104,16 @@ tr.imp td:first-child{box-shadow:inset 4px 0 var(--mute)}
 .esum span{font-size:13px;color:var(--mute)}
 .esum .pos{border-color:var(--ok)}.esum .neg{border-color:var(--warn)}
 .m{color:var(--mute);font-size:13px}
+.mbar{margin-bottom:10px}
+.mexp{margin-left:auto}
+.mach .tgl{display:flex;align-items:center;gap:6px;width:100%;min-height:34px;padding:2px 4px 2px 0;background:none;border:0;border-radius:0;color:var(--ink);font:700 15px/1.2 Barlow,sans-serif;text-align:left}
+.mach .tgl::before{content:"▸";flex:none;width:1em;color:var(--orT)}
+.mach .tgl[aria-expanded=true]::before{content:"▾"}
+.mach tr.mb td{border-top:1px solid color-mix(in srgb,var(--ink) 25%,transparent)}
+.mach tr.ml td{background:var(--soft)}
+.mach tr.ml td:first-child{padding-left:26px}
+.mach .obj{display:flex;gap:7px;align-items:center;min-width:11em}
+.mach .obj b{font-weight:500}
 #sk{display:block;min-height:360px}
 #sk .sk{font:13px Barlow,sans-serif;fill:var(--ink);paint-order:stroke;stroke:var(--panel);stroke-width:3px}
 #sk .skv{fill:var(--mute);font-variant-numeric:tabular-nums}
