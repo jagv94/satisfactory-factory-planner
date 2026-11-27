@@ -123,6 +123,21 @@
     </div>
     <div id="v-surp" hidden><div class="scroll"><table id="surp"></table></div><p class="hint">Llévalos a un AWESOME Sink o elige recetas que los consuman.</p></div>
     <div id="v-alts" hidden>
+      <section class="adv" aria-labelledby="advH">
+        <h3 id="advH"><span>Asesor de alternativas · fábrica «<span id="advName"></span>»</span><small id="advCrit"></small></h3>
+        <div class="row abar"><div class="seg" id="advMode" role="group" aria-label="Qué evaluar"><button type="button" data-am="cand">Candidatas (bloqueadas)</button><button type="button" data-am="act">Activas (desbloqueadas)</button></div>
+          <div class="seg" id="advScope" role="group" aria-label="Qué candidatas"><button type="button" data-as="all">Todas las bloqueadas</button><button type="button" data-as="list">Mi lista</button></div></div>
+        <div id="advListBox" class="advlist" hidden>
+          <input id="advQ" type="search" placeholder="Añadir alternativa bloqueada (nombre en español o inglés)…" autocomplete="off" aria-label="Añadir alternativa a mi lista" aria-controls="advSug">
+          <div id="advSug" class="advsug"></div>
+          <div id="advChips" class="chips" aria-label="Mi lista"></div>
+        </div>
+        <div class="row abar"><button type="button" class="pri" id="advRun">Evaluar</button><button type="button" id="advStop" hidden>Cancelar</button>
+          <progress id="advBar" max="1" value="0" hidden></progress><span class="m" id="advProg" role="status"></span></div>
+        <div class="hint top0" id="advNote"></div>
+        <div id="advOut"></div>
+      </section>
+      <h3>Lista de alternativas</h3>
       <div class="row"><input id="aq" type="search" placeholder="Buscar alternativa…" class="grow" aria-label="Buscar alternativa">
         <select id="af" aria-label="Filtro"><option value="all">Todas</option><option value="on">Desbloqueadas</option><option value="off">Bloqueadas</option></select>
         <button id="altAll">Marcar todas</button><button id="altNone">Ninguna</button></div>

@@ -254,6 +254,100 @@ let csvParse, numCol;
     `orden por cantidad (${cs.materials.length ? byQ[0].name : "?"}) o por puntos (${cs.materials.length ? byP[0].name : "?"}); % «< 0,1 %» para edificios baratos; archivo <fábrica>_materiales.csv`);
 }
 
+// ---------- asesor de alternativas (src/advisor.js)
+{
+  const Rep = require("../src/report.js"), Adv = require("../src/advisor.js"), o = {db, engine: E, report: Rep};
+  const alts = db.recipes.filter(r => r.alt).map(r => r.id), lockAll = () => Object.fromEntries(alts.map(a => [a, true]));
+  const half = () => Object.fromEntries(alts.filter((a, i) => i % 2).map(a => [a, true]));
+  const C = (locked, x) => Object.assign({clock: 1, ext: {}, limits: {}, locked}, x || {});
+  const P = (targets, x) => Object.assign({targets, sel: {}, rc: {}, mode: "opt", objective: "weighted", ban: {}}, x || {});
+  const plates = [{item: "Desc_IronPlate_C", rate: 60}], resin = [{item: "Desc_PolymerResin_C", rate: 100}];
+  const rowOf = (j, rid) => j.rows.find(r => r.id === rid);
+  const PURE = "Recipe_Alternate_PureIronIngot_C", COMP = "Recipe_Alternate_Computer_1_C", HOR = "Recipe_Alternate_HeavyOilResidue_C", DIL = "Recipe_Alternate_DilutedFuel_C";
+  const cResin = C(lockAll()); delete cResin.locked.Recipe_Alternate_PolymerResin_C;
+  // sin el Converter (convierte unas materias primas en otras): con un solo límite, maximizar no tendría techo
+  const noConv = Object.fromEntries(db.recipes.filter(r => db.buildings[r.building].en === "Converter").map(r => [r.id, true]));
+
+  // 38) el optimizador devuelve el valor del criterio (obj): coincide con el coste recalculado desde la solución (c·x)
+  const cx = (objective, res) => res.steps.reduce((v, {p: q, x}) => { const raw = q.kind === "extract" || q.kind === "manual" ? q.out[q.item] * E.rawWeight(q.item) : 0, pw = Math.max(0, q.power), m = q.kind === "recipe" ? 1 : 0;
+    return v + x * (q.kind === "import" ? 1e-6 : objective === "power" ? pw + 1e-3 * raw + 1e-4 * m : objective === "machines" ? m + 1e-3 * raw + 1e-5 * pw : raw + 1e-4 * pw + 1e-3 * m); }, 0);
+  const objOk = [["weighted", {}, {}], ["power", {energy: "gen"}, {}], ["machines", {energy: "gen"}, {ext: {Desc_NitrogenGas_C: {wells: 2}}}]].every(([ob, px, cx2]) => {
+    const r = E.solveOpt(C({}, cx2), P(f5, Object.assign({objective: ob}, px))); return !r.error && near(r.obj, cx(ob, r), 1e-9); });
+  ok(objOk, "motor: el valor del criterio devuelto (obj) = coste recalculado desde la solución, en los tres criterios (con energía y pozos)");
+  // 39) caso claramente mejor: Lingote de hierro puro para placas con todo bloqueado
+  const jp = Adv.run(Adv.prepare(o, C(lockAll()), P(plates), {mode: "cand"})), rp = rowOf(jp, PURE);
+  ok(rp.state === "mejora" && rp.rel < -0.3 && rp.delta.score < 0 && rp.res.steps.some(s => s.p.id === PURE) && Adv.groups(jp).main[0].id === PURE,
+    `asesor: Lingote de hierro puro mejora las placas (${(rp.rel * 100).toFixed(1)} % del criterio, ${rp.delta.score.toFixed(3)} puntos de % del mapa) y encabeza la lista`);
+  // 40) no entra: una alternativa de Ordenador para placas se descarta sin resolver
+  const rc = rowOf(jp, COMP);
+  ok(rc.state === "noentra" && rc.why === "noentra" && rc.fast && !jp.queue.includes(rc) && !rc.res, "asesor: una alternativa de Ordenador no entra en una fábrica de placas (sin resolver)");
+  // 41) subproducto: con todo bloqueado, la Sílice disuelta no tiene receta; «Cuarzo purificado» (alt) da Cristal de cuarzo
+  // y Sílice disuelta como subproducto. Su producto principal no se alcanza, pero entra por el subproducto y hace posible el plan
+  const QP = "Recipe_Alternate_Quartz_Purified_C", pSil = P([{item: "Desc_DissolvedSilica_C", rate: 100}]);
+  const jsil = Adv.run(Adv.prepare(o, C(lockAll()), pSil, {mode: "cand"})), rq = rowOf(jsil, QP);
+  ok(!E.reach(C(lockAll()), pSil).has(Object.keys(E.R[QP].out)[0]) && jsil.base.error === "infeasible" && jsil.queue.includes(rq) && rq.state === "viable" && rq.usedNew,
+    "asesor: una alternativa que solo llega por su subproducto entra en el cálculo (y aquí hace posible el plan)");
+  // entra pero no la usaría: «Residuo de petróleo pesado» (alt) en una fábrica de resina con «Resina de polímero» (alt)
+  const jr = Adv.run(Adv.prepare(o, cResin, P(resin), {mode: "cand"})), rh = rowOf(jr, HOR);
+  ok(jr.queue.includes(rh) && rh.state === "noaporta" && rh.why === "nolausa" && !rh.usedNew && Math.abs(rh.rel) <= Adv.TOL,
+    "asesor: una alternativa que entra en el cálculo pero no se usaría sale «No aporta: no la usaría»");
+  // 42) energía: «Combustible diluido» solo entra en una fábrica de placas si la energía se genera (generadores de combustible)
+  const joff = Adv.run(Adv.prepare(o, C(lockAll()), P(plates), {mode: "cand"})), jgen = Adv.run(Adv.prepare(o, C(lockAll()), P(plates, {energy: "gen"}), {mode: "cand"}));
+  ok(rowOf(joff, DIL).state === "noentra" && jgen.queue.includes(rowOf(jgen, DIL)) && rowOf(jgen, DIL).state !== "noentra",
+    "asesor: con «generar», una alternativa de combustible entra por los generadores; con «solo informar», no entra");
+  // 43) atajos frente a resolverlo todo: las descartadas sin resolver dan exactamente el mismo criterio al resolverlas
+  // (incluye el caso con subproducto, el de energía generada y las activas sin uso de la Fase 5)
+  const jact = Adv.run(Adv.prepare(o, C(half()), P(f5), {mode: "act"})), jf5 = Adv.run(Adv.prepare(o, C(half()), P(f5), {mode: "cand"}));
+  let nFast = 0, badFast = [];
+  for (const j of [jp, jsil, jr, jgen, jf5, jact]) for (const r of j.rows.filter(r => r.fast)) {
+    nFast++;
+    const res = E.solveOpt(Adv.setUnlocked(JSON.parse(JSON.stringify(j.cfg)), r.id, j.mode === "cand"), j.plan), v = Adv.crit(res, j.plan);
+    // con la base sin solución, la descartada debe seguir sin solución (mismo error)
+    if (j.base.error ? res.error !== j.base.error : res.error || !near(v, j.base.crit, 1e-9)) badFast.push(r.id + " " + (res.error || (v - j.base.crit)));
+  }
+  ok(nFast > 100 && !badFast.length, `asesor: los ${nFast} atajos dan el mismo criterio que resolverlas una a una` + (badFast.length ? " — " + badFast.slice(0, 3).join("; ") : ""));
+  // 44) monotonía sin pozos: desbloquear nunca empeora el criterio, bloquear nunca lo mejora
+  const evd = [jp, jr, joff, jgen, jf5].flatMap(j => j.rows.filter(r => r.rel != null));
+  ok(evd.length > 200 && evd.every(r => r.rel <= 1e-9) && jact.rows.every(r => r.rel == null || r.rel >= -1e-9) && jact.rows.some(r => r.state === "importa") && jact.rows.some(r => r.state === "nouso"),
+    "asesor: sin pozos, desbloquear nunca empeora y bloquear nunca mejora el criterio");
+  // 45) con pozos (Pressurizers) no se mantiene: el punto fijo puede caer en otro reparto. Caso conocido: Fase 5, mínima potencia,
+  // energía generada y 2 pozos de nitrógeno: bloquear alguna activa mejora un 0,4 %. La prueba admite un margen del 1 %
+  // y comprueba que el asesor lo etiqueta como «Mejor sin ella» (con pozos, el atajo «no se usa» no se aplica)
+  const cW = C(half(), {ext: {Desc_NitrogenGas_C: {wells: 2}}}), pW = P(f5, {energy: "gen", objective: "power"});
+  const jw = Adv.run(Adv.prepare(o, cW, pW, {mode: "act"})), mw = Math.min(...jw.rows.filter(r => r.rel != null).map(r => r.rel));
+  ok(jw.wells && !jw.rows.some(r => r.why === "sinuso" && r.fast) && mw < -Adv.TOL && mw > -0.01 && jw.rows.filter(r => r.rel < -Adv.TOL).every(r => r.state === "mejorsin"),
+    `asesor: con pozos, bloquear puede mejorar algo el criterio (mínimo ${(mw * 100).toFixed(2)} %, margen 1 %) y se marca «Mejor sin ella»`);
+  // 46) desbloquear desde el asesor = desbloquear a mano: misma configuración y mismo plan optimizado
+  const hand = JSON.parse(JSON.stringify(jp.cfg)); delete hand.locked[PURE];
+  const viaAdv = Adv.setUnlocked(JSON.parse(JSON.stringify(jp.cfg)), PURE, true), resH = E.solveOpt(hand, jp.plan);
+  const same = (a, b) => a.steps.length === b.steps.length && a.steps.every((s, i) => s.p.id === b.steps[i].p.id && s.x === b.steps[i].x);
+  const ra = rowOf(jact, jact.queue[0].id), handL = JSON.parse(JSON.stringify(jact.cfg)); handL.locked[ra.id] = true;
+  ok(JSON.stringify(viaAdv) === JSON.stringify(hand) && same(rp.res, resH) && same(rp.res, E.solveOpt(viaAdv, jp.plan))
+    && JSON.stringify(Adv.setUnlocked(JSON.parse(JSON.stringify(jact.cfg)), ra.id, false)) === JSON.stringify(handL) && same(ra.res, E.solveOpt(handL, jact.plan)),
+    "asesor: desbloquear (o bloquear) desde el asesor da la misma configuración y el mismo plan que hacerlo a mano");
+  // 47) por partes: con presupuesto 0 (una por paso) acaba igual que de una vez; cancelar detiene la evaluación
+  const jc = Adv.prepare(o, C(half()), P(f5), {mode: "cand"}); let steps = 0;
+  while (!Adv.step(jc, 0)) steps++;
+  const sig = j => j.rows.map(r => r.id + r.state + (r.rel ?? "").toString()).join();
+  const jx = Adv.prepare(o, C(half()), P(f5), {mode: "cand"}); Adv.step(jx, 0); Adv.cancel(jx); const doneX = jx.done;
+  ok(steps === jc.queue.length - 1 && sig(jc) === sig(jf5) && Adv.finished(jx) && Adv.step(jx, 0) && jx.done === doneX && doneX === 1 && Adv.groups(jx).pending === jx.queue.length - 1,
+    `asesor: por partes (${jc.queue.length} pasos) da lo mismo que de una vez; cancelar lo detiene y deja las pendientes sin evaluar`);
+  // 48) umbral relativo único (0,01 % del criterio) para todos los estados
+  const all = [jp, jr, joff, jgen, jf5, jact, jw].flatMap(j => j.rows.map(r => Object.assign({mode: j.mode}, r))).filter(r => r.rel != null);
+  ok(all.every(r => Math.abs(r.rel) <= Adv.TOL ? ["noaporta", "noentra", "prescindible", "nouso"].includes(r.state) : ["mejora", "empeora", "importa", "mejorsin"].includes(r.state)),
+    "asesor: cambios de menos del 0,01 % del criterio cuentan como «sin cambio» en todos los estados");
+  // 49) Manual: la base es el optimizador sin maximizar; con maximizar (en Optimizar), el criterio es la escala
+  const jm = Adv.prepare(o, C(lockAll()), P(plates, {mode: "manual", maximize: true}), {mode: "cand"});
+  const lim = C(lockAll(), {limits: {Desc_OreIron_C: 480}}), jmax = Adv.run(Adv.prepare(o, lim, P(plates, {maximize: true, ban: noConv}), {mode: "cand"})), rmx = rowOf(jmax, PURE);
+  ok(jm.plan.mode === "opt" && !jm.plan.maximize && near(jm.base.crit, E.solveOpt(C(lockAll()), P(plates)).obj) && jmax.base.crit === -jmax.base.res.scale
+    && rmx.state === "mejora" && rmx.res.scale > jmax.base.res.scale * 1.5,
+    `asesor: en Manual usa el optimizador sin maximizar; al maximizar compara la escala (×${jmax.base.res.scale.toFixed(2)} → ×${rmx.res.scale.toFixed(2)} con Lingote de hierro puro)`);
+  // 50) base sin solución: las candidatas que la hacen posible salen «Hace posible el plan»; las activas no se evalúan
+  const cImp = C(lockAll(), {limits: {Desc_OreIron_C: 50}}), pImp = P(plates, {ban: noConv}), jv = Adv.run(Adv.prepare(o, cImp, pImp, {mode: "cand"})), jb = Adv.prepare(o, cImp, pImp, {mode: "act"});
+  ok(jv.base.error === "infeasible" && rowOf(jv, PURE).state === "viable" && Adv.groups(jv).main[0].state === "viable" && jb.blocked && !jb.queue.length,
+    "asesor: si la fábrica no tiene solución, marca las candidatas que la hacen posible; las activas no se evalúan");
+}
+
 // ---------- HTML generado
 // 22) Planificador.html al día con src/ y data/, sin errores de sintaxis (node --check) y arrancando en un DOM mínimo
 {
@@ -262,7 +356,7 @@ let csvParse, numCol;
   const H = path.join(__dirname, ".."), html = fs.readFileSync(process.env.PLANIFICADOR_HTML || path.join(H, "Planificador.html"), "utf8");
   const dbM = html.match(/<script type="application\/json" id="db">([\s\S]*?)<\/script>/), jsM = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)];
   const js = jsM.map(m => m[1]).join("\n");
-  const src = ["engine.js", "glyphs.js", "sankey.js", "report.js", "app.js"].map(f => fs.readFileSync(path.join(H, "src", f), "utf8")).join("\n").replace(/<\/script/g, "<\\/script");
+  const src = ["engine.js", "glyphs.js", "sankey.js", "report.js", "advisor.js", "app.js"].map(f => fs.readFileSync(path.join(H, "src", f), "utf8")).join("\n").replace(/<\/script/g, "<\\/script");
   ok(dbM && jsM.length === 1 && js === src && JSON.stringify(JSON.parse(dbM[1])) === JSON.stringify(db), "Planificador.html está al día (ejecuta python build.py si falla)");
   const tmp = path.join(os.tmpdir(), `planificador_check_${process.pid}.js`);
   fs.writeFileSync(tmp, js);
@@ -286,9 +380,9 @@ let csvParse, numCol;
   };
   const {els, ctx, err: bootErr} = boot(null);
   const sub = els.sub ? String(els.sub.textContent) : "";
-  ok(!bootErr && ["Engine", "Glyphs", "Sankey"].every(g => vm.runInContext(`typeof ${g}`, ctx) === "object") && sub.includes(`${Object.keys(db.items).length} objetos, ${db.recipes.length} recetas`)
+  ok(!bootErr && ["Engine", "Glyphs", "Sankey", "Report", "Advisor"].every(g => vm.runInContext(`typeof ${g}`, ctx) === "object") && sub.includes(`${Object.keys(db.items).length} objetos, ${db.recipes.length} recetas`)
     && String(els.kpis && els.kpis.innerHTML).includes("Consumo") && String(els.prod && els.prod.innerHTML).length > 1000,
-    "la app arranca: define Engine, Glyphs y Sankey, rellena el subtítulo, las cifras y la tabla de producción" + (bootErr ? ` — ${bootErr.name}: ${bootErr.message} (${(bootErr.stack.match(/Planificador\.html:\d+/) || ["?"])[0]})` : ""));
+    "la app arranca: define Engine, Glyphs, Sankey, Report y Advisor, rellena el subtítulo, las cifras y la tabla de producción" + (bootErr ? ` — ${bootErr.name}: ${bootErr.message} (${(bootErr.stack.match(/Planificador\.html:\d+/) || ["?"])[0]})` : ""));
   // 23) los campos internos de plan («_», p. ej. _pressMax) no se pueden fijar desde una configuración guardada o importada
   // (las dos rutas usan restore()). Con _pressMax: 0 aplicado, este plan daría el error «press».
   const savedP = JSON.stringify({v: 2, cur: 0, cfg: {clock: 1, ext: {Desc_NitrogenGas_C: {wells: 2}}},
@@ -306,6 +400,18 @@ let csvParse, numCol;
     && String(b3.els.cspec && b3.els.cspec.innerHTML).includes(db.specials.sloop.es) && String(b3.els.costName && b3.els.costName.textContent) === "m"
     && String(b3.els.cnotes && b3.els.cnotes.innerHTML).includes("cimientos"),
     "la pestaña Máquinas se pinta: edificios plegados con sus líneas, Pressurizers, generadores, total y coste de construcción" + (b3.err ? ` — ${b3.err.name}: ${b3.err.message}` : ""));
+  // 51) la pestaña Alternativas pinta el asesor: fábrica en el título y avisos fijos (cada una por separado, sin filtro por tier,
+  // umbral del 0,01 %). Sin pozos afirma que desbloquear nunca empeora; con pozos, no. En Manual, avisa de que la base es el plan óptimo
+  const savedA = (ext, mode) => JSON.stringify({v: 2, cur: 0, tab: "alts", cfg: {clock: 1, ext, locked: {}},
+    plans: [{name: "a", targets: [{item: "Desc_IronPlate_C", rate: 60}], sel: {}, rc: {}, mode, objective: "weighted", ban: {}, energy: "off", gridMW: 0}]});
+  const b4 = boot(savedA({}, "opt")), n4 = String(b4.els.advNote && b4.els.advNote.innerHTML);
+  const b5 = boot(savedA({Desc_NitrogenGas_C: {wells: 2}}, "manual")), n5 = String(b5.els.advNote && b5.els.advNote.innerHTML);
+  const nAlt = db.recipes.filter(r => r.alt).length;
+  ok(!b4.err && !b5.err && vm.runInContext("typeof Advisor", b4.ctx) === "object" && String(b4.els.advName.textContent) === "a" && String(b4.els.altCount.textContent).startsWith(`${nAlt} de ${nAlt}`)
+    && [n4, n5].every(n => n.includes("Cada alternativa se evalúa por separado") && n.includes("aún no hay filtro por tier") && n.includes("0,01 %"))
+    && n4.includes("nunca empeora") && !n4.includes("Tu fábrica está en Manual") && !n5.includes("nunca empeora") && n5.includes("Pressurizers") && n5.includes("Tu fábrica está en Manual")
+    && String(b5.els.advCrit.textContent).includes("Manual"),
+    "la pestaña Alternativas pinta el asesor con sus avisos (con pozos no afirma la monotonía; en Manual, base óptima)" + ((b4.err || b5.err) ? ` — ${(b4.err || b5.err).message}` : ""));
 }
 console.log(fails ? `\n${fails} fallo(s)` : "\nTodo correcto");
 process.exitCode = fails ? 1 : 0;

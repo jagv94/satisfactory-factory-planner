@@ -217,9 +217,10 @@ const Engine = (() => {
   }
 
   // ---------- optimizador: varias recetas por objeto, límites de recursos, objetivos alternativos
-  function solveOpt0(cfg, plan, targets, mode) {
-    const d = demand(targets ?? plan.targets), sup = supply(plan);
-    const objective = mode || plan.objective || "weighted";
+  // procesos que entran en el LP: búsqueda desde la demanda por las recetas permitidas y no excluidas.
+  // reach = objetos demandados por algún proceso (o por los objetivos); una receta entra si alguna de sus salidas,
+  // subproductos incluidos, está en reach. Con «generar», Power_MW entra por las máquinas que consumen.
+  function collect(cfg, plan, d) {
     const procs = [], seenP = new Set(), seenI = new Set(), q = Object.keys(d);
     const add = p => { if (!seenP.has(p.id)) { seenP.add(p.id); procs.push(p); for (const j in p.in) q.push(j); } };
     while (q.length) {
@@ -230,6 +231,13 @@ const Engine = (() => {
       if (it.manual && (plan.allowManual || (plan.sel || {})[i] === "manual")) add(proc(cfg, plan, "manual", i));
       for (const id of PROD[i] || []) if (allowed(cfg, id) && !(plan.ban || {})[id]) add(proc(cfg, plan, id, i));
     }
+    return {procs, reach: seenI};
+  }
+  const reach = (cfg, plan, targets) => collect(cfg, plan, demand(targets ?? plan.targets)).reach;
+  function solveOpt0(cfg, plan, targets, mode) {
+    const d = demand(targets ?? plan.targets), sup = supply(plan);
+    const objective = mode || plan.objective || "weighted";
+    const {procs, reach: seenI} = collect(cfg, plan, d);
     const items = [...seenI];
     for (const p of procs) for (const o in p.out) if (!seenI.has(o)) { seenI.add(o); items.push(o); }
     const ix = {}; items.forEach((k, i) => ix[k] = i);
@@ -262,7 +270,8 @@ const Engine = (() => {
     const steps = procs.map((p, j) => ({p, x: res.x[j]})).filter(s => s.x > 1e-9);
     const scale = maxMode ? res.x[tcol] : 1;
     const d2 = {}; for (const i in d) d2[i] = d[i] * scale;
-    return {steps, d: d2, error: maxMode && scale > 9.99e5 ? "unbounded" : null, scale: maxMode ? scale : null, supply: sup, energy: energyOn(plan)};
+    // obj: valor del criterio en el LP (con maximizar incluye −1e6 · escala); lo usa el asesor de alternativas
+    return {steps, d: d2, error: maxMode && scale > 9.99e5 ? "unbounded" : null, scale: maxMode ? scale : null, supply: sup, energy: energyOn(plan), obj: res.value};
   }
 
   // ---------- Pressurizers de los Resource Well: el usuario indica cuántos pozos usa por fluido (cfg.ext[item].wells).
@@ -275,10 +284,11 @@ const Engine = (() => {
     const w = DB.extractors.well, c = extCfg(cfg, item), n = +c.wells || 0;
     return n > 0 ? n * w.pressurizer * Math.pow(c.clock, w.pressurizerExp ?? EXP) : 0;
   }
+  // potencia de los Pressurizers por fluido de pozo (solo los fluidos con pozos indicados)
+  function pressAll(cfg) { const W = {}; for (const i of (DB.extractors.well || {}).items || []) { const pw = pressPower(cfg, i); if (pw > 0) W[i] = pw; } return W; }
   function withPress(fn) {
     return (cfg, plan, ...rest) => {
-      const W = {};
-      for (const i of (DB.extractors.well || {}).items || []) { const pw = pressPower(cfg, i); if (pw > 0) W[i] = pw; }
+      const W = pressAll(cfg);
       if (!Object.keys(W).length) return fn(cfg, plan, ...rest);
       const wellX = res => { const x = {}; for (const s of res.steps) if (s.p.kind === "extract" && s.p.ext === "well") x[s.p.item] = (x[s.p.item] || 0) + s.x; return x; };
       // coherente: cada fluido o no usa pozos, o su reparto cubre exactamente la potencia de sus Pressurizers
@@ -355,6 +365,6 @@ const Engine = (() => {
     const a = analyze(cfg, solve(cfg, p2, [{item, rate: 1}]));
     return {score: a.score, error: a.error};
   }
-  return {POWER, init, options, defaultSel, selOf, proc, solveManual, solveOpt, solve, analyze, depths, simplex, costPerUnit, rawWeight, shards, extCfg, recCfg, allowed, pressPower, isGen, get R() { return R; }, get PRIM() { return PRIM; }, get OPTS() { return OPTS; }};
+  return {POWER, init, options, defaultSel, selOf, proc, solveManual, solveOpt, solve, reach, pressAll, analyze, depths, simplex, costPerUnit, rawWeight, shards, extCfg, recCfg, allowed, pressPower, isGen, get R() { return R; }, get PRIM() { return PRIM; }, get OPTS() { return OPTS; }};
 })();
 if (typeof module !== "undefined") module.exports = Engine;

@@ -1,4 +1,4 @@
-// Interfaz del planificador. Depende de Engine, Glyphs, Sankey y Report.
+// Interfaz del planificador. Depende de Engine, Glyphs, Sankey, Report y Advisor.
 {
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
@@ -362,6 +362,7 @@ function renderAlts() {
   for (const r of alts) { const p = Object.keys(r.out)[0]; (byP[p] = byP[p] || []).push(r); }
   const n = alts.filter(r => !L[r.id]).length;
   $("altCount").textContent = `${n} de ${alts.length} alternativas desbloqueadas`;
+  renderAdvisor();
   const fmtIO = o => Object.entries(o).map(([k, v]) => `${ic(k)}${nf(v)} ${esc(nm(k))}`).join(" + ");
   $("alts").innerHTML = Object.keys(byP).sort((a, b) => nm(a).localeCompare(nm(b))).map(p => {
     const rs = byP[p].filter(r => (fil === "all" || (fil === "on") === !L[r.id]) && (!q || (r.es + " " + r.en + " " + searchKey(p)).toLowerCase().includes(q)));
@@ -369,6 +370,98 @@ function renderAlts() {
     return `<div class="ag"><h3>${ic(p)} ${esc(nm(p))}</h3>${rs.map(r => `<label class="alt-r"><input type="checkbox" data-act="lock" data-id="${r.id}"${L[r.id] ? "" : " checked"}>
       <span><b>${esc(r[S.lang])}</b> <small>${esc(DB.buildings[r.building][S.lang])}</small><br><small class="io">${fmtIO(r.in)} → ${fmtIO(r.out)}</small></span></label>`).join("")}</div>`;
   }).join("") || `<p class="hint">Ninguna coincide.</p>`;
+}
+
+// ---------- asesor de alternativas (Advisor): estado en memoria, no se guarda ni pasa por set()
+const adv = {mode: "cand", scope: "all", list: [], job: null, running: false, timer: 0, restOpen: false};
+// firma de lo que usa el asesor: si cambia, los resultados quedan desactualizados (cinta y tubería no influyen)
+const advSig = () => JSON.stringify([S.cur, Object.assign({}, S.cfg, {belt: 0, pipe: 0}), Object.assign({}, P(), {name: 0})]);
+const advKey = () => adv.mode + (adv.mode === "cand" ? ":" + adv.scope + (adv.scope === "list" ? ":" + adv.list.join() : "") : "");
+const CRIT = {weighted: "mínimo de recursos (ponderado por escasez)", power: "mínima potencia", machines: "mínimo de máquinas"};
+const fold = t => String(t).normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
+const altProd = r => Object.keys(r.out)[0];
+const ADV_ST = {mejora: "Mejora", empeora: "Empeora", error: "Sin solución", viable: "Hace posible el plan", importa: "Importa", mejorsin: "Mejor sin ella",
+  prescindible: "Prescindible", imprescindible: "Imprescindible: sin ella no hay solución"};
+const ADV_WHY = {nolausa: "no la usaría", singanancia: "la usaría, pero sin ganancia", sinsol: "sigue sin solución", noentra: "no entra en esta fábrica", excluida: "excluida en esta fábrica", sinuso: "no se usa"};
+function advState(r) {
+  if (ADV_ST[r.state]) return ADV_ST[r.state];
+  if (r.state === "nouso") return r.why === "sinuso" ? "No se usa" : "No se usa: " + ADV_WHY[r.why];
+  return "No aporta: " + (ADV_WHY[r.why] || "");
+}
+function advStart() {
+  advCancel();
+  const ids = adv.mode === "cand" && adv.scope === "list" ? adv.list : null;
+  const job = Advisor.prepare({db: DB, engine: Engine, report: Report}, S.cfg, P(), {mode: adv.mode, ids});
+  job.sig = advSig(); job.key = advKey();
+  adv.job = job; adv.running = true;
+  renderAdvisor(); adv.timer = setTimeout(advTick, 0);
+}
+function advTick() {
+  const j = adv.job; if (!j || !adv.running) return;
+  if (j.sig !== advSig()) { advCancel(); renderAdvisor(); return; }   // la fábrica o los desbloqueos cambiaron: se cancela
+  if (Advisor.step(j, 40)) adv.running = false; else adv.timer = setTimeout(advTick, 0);
+  renderAdvisor();
+}
+function advCancel() { clearTimeout(adv.timer); if (adv.running && adv.job) Advisor.cancel(adv.job); adv.running = false; }
+function advSuggest() {
+  const q = fold($("advQ").value.trim());
+  const L = S.cfg.locked, hits = !q ? [] : DB.recipes.filter(r => r.alt && L[r.id] && !adv.list.includes(r.id) && fold(r.es + " " + r.en + " " + searchKey(altProd(r))).includes(q)).slice(0, 8);
+  $("advSug").innerHTML = hits.map(r => `<button type="button" data-act="advadd" data-id="${r.id}">${ic(altProd(r))} ${esc(r[S.lang])} <small>${esc(nm(altProd(r)))}</small></button>`).join("")
+    || (q ? `<p class="hint top0">Ninguna alternativa bloqueada coincide.</p>` : "");
+}
+function advAdd(id) { if (id && !adv.list.includes(id)) adv.list.push(id); $("advQ").value = ""; advSuggest(); renderAdvisor(); $("advQ").focus(); }
+function renderAdvisor() {
+  const plan = P(), j = adv.job, opt = plan.mode === "opt", maxi = opt && !!plan.maximize;
+  if (adv.running && j && j.sig !== advSig()) advCancel();
+  $("advName").textContent = plan.name;
+  $("advCrit").textContent = "criterio: " + (maxi ? "maximizar los objetivos (escala)" : CRIT[plan.objective] || plan.objective) + (opt ? "" : " · fábrica en Manual");
+  for (const b of $("advMode").querySelectorAll("button")) b.setAttribute("aria-pressed", b.dataset.am === adv.mode);
+  for (const b of $("advScope").querySelectorAll("button")) b.setAttribute("aria-pressed", b.dataset.as === adv.scope);
+  const cand = adv.mode === "cand", list = cand && adv.scope === "list";
+  $("advScope").hidden = !cand; $("advListBox").hidden = !list;
+  const L = S.cfg.locked;
+  $("advChips").innerHTML = adv.list.map(id => { const r = Engine.R[id]; if (!r) return "";
+    return `<span class="chip${L[id] ? "" : " off"}">${ic(altProd(r))} ${esc(r[S.lang])}${L[id] ? "" : " <small>(ya desbloqueada)</small>"} <button type="button" class="x" data-act="advrm" data-id="${id}" aria-label="Quitar ${esc(r[S.lang])} de mi lista">×</button></span>`; }).join("")
+    || `<span class="hint top0">Tu lista está vacía: añade las alternativas que te ofrece un disco duro.</span>`;
+  const nList = adv.list.filter(id => L[id]).length;
+  $("advRun").disabled = adv.running || (list && !nList);
+  $("advStop").hidden = !adv.running;
+  const show = j && j.key === advKey(), stale = show && j.sig !== advSig();
+  $("advRun").textContent = stale ? "Volver a evaluar" : "Evaluar";
+  const N = j ? j.queue.length : 0, secs = !j ? "" : j.ms < 50 ? "menos de 0,1 s" : nf(j.ms / 1000, 1) + " s";
+  $("advBar").hidden = !(show && adv.running); $("advBar").max = Math.max(1, N); $("advBar").value = j ? j.done : 0;
+  const fast = j ? j.rows.filter(r => r.fast).length : 0;
+  $("advProg").textContent = !show ? "" : adv.running ? `Evaluando: ${j.done} de ${N} · ${secs}` : j.cancelled ? `Cancelado: ${j.done} de ${N} evaluadas` : `${j.rows.length} ${j.rows.length === 1 ? "alternativa" : "alternativas"}: ${N} ${N === 1 ? "recalculada" : "recalculadas"} en ${secs}${fast ? `, ${fast} ${fast === 1 ? "descartada" : "descartadas"} sin recalcular` : ""}.`;
+  // avisos
+  const wells = Object.keys(Engine.pressAll(S.cfg)).length > 0;
+  const notes = [`<b>Cada alternativa se evalúa por separado, sobre tu plan actual.</b> Algunas solo compensan combinadas con otras (por ejemplo, una que produce un intermedio que solo usa otra alternativa): que aquí no aporten no quiere decir que no sirvan nunca. Puede recomendar alternativas que todavía no puedes conseguir en tu partida (aún no hay filtro por tier).`];
+  if (!opt) notes.push(`Tu fábrica está en Manual: la base es el plan óptimo con tus alternativas actuales (el de «Optimizar», sin maximizar), no tu selección manual. Desbloquear una alternativa solo la añade a los desplegables.`);
+  notes.push(wells ? `Tienes pozos (Pressurizers) indicados en Extracción: su potencia se reparte con una aproximación, así que aquí desbloquear una alternativa puede empeorar algo el criterio (o bloquearla, mejorarlo). Cambios de menos del 0,01 % del criterio cuentan como «sin cambio».`
+    : `Con el criterio de la fábrica, desbloquear una alternativa nunca empeora el plan (ni bloquearla lo mejora). Cambios de menos del 0,01 % del criterio cuentan como «sin cambio».`);
+  notes.push(`Columnas: diferencia ${cand ? "al desbloquearla" : "al bloquearla"}, con máquinas enteras y reloj uniforme como las cifras de arriba (alguna puede ir un poco en contra aunque mejore el criterio). Coste = puntos del Sink del coste de construcción. Desbloquear o bloquear desde aquí cambia la lista de abajo y vale para todas las fábricas (Ctrl+Z para deshacer).`);
+  $("advNote").innerHTML = notes.map(x => `<p>${x}</p>`).join("");
+  // resultados
+  if (!show || adv.running) { $("advOut").innerHTML = ""; return; }
+  const out = [];
+  if (stale) out.push(`<p class="advst">Has cambiado la fábrica o los desbloqueos después de evaluar: estos resultados son de antes. Pulsa «Volver a evaluar».</p>`);
+  if (j.base.error) out.push(`<p class="advst">${j.blocked ? "Ahora la fábrica no tiene solución, así que no hay nada que empeorar al bloquear: " : "Ahora la fábrica no tiene solución; se marcan las alternativas que la hacen posible. "}${esc(ERR[j.base.error] || j.base.error)}</p>`);
+  const g = Advisor.groups(j);
+  // diferencia con signo; verde si mejora (menos es mejor, salvo up = más es mejor)
+  const sg = (v, d, u, up) => { if (v == null || !isFinite(v)) return "–"; if (Math.abs(v) < 5 * Math.pow(10, -d - 1)) return `<span class="m">0</span>`; return `<span class="${(v < 0) !== !!up ? "good" : "bad"}">${v > 0 ? "+" : "−"}${nf(Math.abs(v), d)}${u || ""}</span>`; };
+  // con maximizar, rel es el cambio de −escala: se enseña el de la escala (más es mejor)
+  const critCell = r => r.rel == null ? "–" : maxi ? sg(-r.rel * 100, 2, " %", true) : sg(r.rel * 100, 2, " %");
+  const row = r => { const R0 = Engine.R[r.id], p = altProd(R0), d = r.delta || {}, on = !L[r.id];
+    return `<tr><td><div class="obj">${ic(p)}<div><b>${esc(R0[S.lang])}</b><small>${esc(nm(p))} · ${esc(DB.buildings[R0.building][S.lang])}</small></div></div></td>
+      <td class="st st-${r.state}">${esc(advState(r))}</td><td class="n">${critCell(r)}</td><td class="n">${sg(d.score, Math.abs(d.score || 0) < 0.1 ? 3 : 2)}</td><td class="n">${sg(d.mw, 1)}</td><td class="n">${sg(d.mach, 0)}</td><td class="n">${sg(d.points, 0)}</td>
+      <td><button type="button" class="x" data-act="advtgl" data-id="${r.id}" aria-label="${on ? "Bloquear" : "Desbloquear"} ${esc(R0[S.lang])}">${on ? "Bloquear" : "Desbloquear"}</button></td></tr>`; };
+  const head = `<thead><tr><th>Alternativa</th><th>Estado</th><th class="n">${maxi ? "Escala" : "Criterio"}</th><th class="n">Recursos<small>Δ % del mapa</small></th><th class="n">Energía<small>Δ MW</small></th><th class="n">Máquinas<small>Δ</small></th><th class="n">Coste<small>Δ puntos</small></th><th></th></tr></thead>`;
+  const byName = (a, b) => Engine.R[a.id][S.lang].localeCompare(Engine.R[b.id][S.lang]);
+  if (g.main.length) out.push(`<div class="scroll"><table class="advt${stale ? " stale" : ""}">${head}<tbody>${g.main.map(row).join("")}</tbody></table></div>`);
+  else if (!j.blocked) out.push(`<p class="hint">${cand ? "Ninguna de las evaluadas mejora esta fábrica." : "Ninguna de tus alternativas activas importa en esta fábrica: puedes bloquearlas sin perder nada."}</p>`);
+  if (g.rest.length) out.push(`<details class="advrest"${adv.restOpen ? " open" : ""}><summary>${g.rest.length} ${cand ? "que no aportan" : "que no se usan"}</summary><div class="scroll"><table class="advt${stale ? " stale" : ""}">${head}<tbody>${g.rest.sort(byName).map(row).join("")}</tbody></table></div></details>`);
+  if (j.cancelled && g.pending) out.push(`<p class="hint">${g.pending} sin evaluar.</p>`);
+  $("advOut").innerHTML = out.join("");
+  const dt = $("advOut").querySelector("details"); if (dt) dt.addEventListener("toggle", () => { adv.restOpen = dt.open; });
 }
 
 // ---------- acciones
@@ -391,7 +484,7 @@ document.addEventListener("change", e => {
   else if (a === "trate") set(() => { plan.targets[+t.dataset.k].rate = Math.max(0, +t.value || 0); });
   else if (a === "rclock") set(() => { const rc = plan.rc[t.dataset.id] = plan.rc[t.dataset.id] || {}; rc.clock = Math.min(2.5, Math.max(0.01, (+t.value || 100) / 100)); });
   else if (a === "rsloop") set(() => { const rc = plan.rc[t.dataset.id] = plan.rc[t.dataset.id] || {}; rc.sloops = Math.max(0, Math.round(+t.value || 0)); });
-  else if (a === "lock") set(() => { if (t.checked) delete S.cfg.locked[t.dataset.id]; else S.cfg.locked[t.dataset.id] = true; });
+  else if (a === "lock") set(() => { Advisor.setUnlocked(S.cfg, t.dataset.id, t.checked); });
   else if (t.id === "plan") set(() => { S.cur = +t.value; });
   else if (t.id === "pname") set(() => { P().name = t.value.trim() || "Sin nombre"; });
   else if (t.id === "clock") set(() => { S.cfg.clock = Math.min(2.5, Math.max(0.01, (+t.value || 100) / 100)); });
@@ -405,7 +498,7 @@ document.addEventListener("change", e => {
   else if (t.id === "dbfile" && t.files[0]) t.files[0].text().then(x => { const d = JSON.parse(x); if (!d.recipes || !d.items || !d.buildings) throw new Error("formato no válido"); loadDB(d); costCache.clear(); render(); $("dbinfo").textContent = "Base de datos cargada desde archivo."; }).catch(err => { $("dbinfo").textContent = "No se pudo cargar: " + err.message; });
   else if (t.id === "cfgfile" && t.files[0]) t.files[0].text().then(x => importState(x));
 });
-document.addEventListener("input", e => { if (e.target.id === "q") filterProd(); if (e.target.id === "aq") renderAlts(); });
+document.addEventListener("input", e => { if (e.target.id === "q") filterProd(); if (e.target.id === "aq") renderAlts(); if (e.target.id === "advQ") advSuggest(); });
 // enlaces internos: desplazamiento con JS (el ancla #id no siempre navega, p. ej. en copias data: o dentro de un marco)
 document.addEventListener("click", e => {
   const a = e.target.closest("a[data-go]"); if (!a) return;
@@ -445,6 +538,13 @@ document.addEventListener("click", e => {
   else if (t.id === "mCopy" || t.id === "mDl") machExport(t.id === "mCopy" ? "copy" : "dl", t);
   else if (t.id === "limMap") set(() => { for (const [k, v] of Object.entries(DB.world)) S.cfg.limits[k] = v; });
   else if (t.id === "limNone") set(() => { S.cfg.limits = {}; });
+  else if (t.dataset.am) { if (adv.mode !== t.dataset.am) { advCancel(); adv.mode = t.dataset.am; renderAdvisor(); } }
+  else if (t.dataset.as) { if (adv.scope !== t.dataset.as) { advCancel(); adv.scope = t.dataset.as; renderAdvisor(); } }
+  else if (t.id === "advRun") advStart();
+  else if (t.id === "advStop") { advCancel(); renderAdvisor(); }
+  else if (a === "advadd") advAdd(t.dataset.id);
+  else if (a === "advrm") { adv.list = adv.list.filter(x => x !== t.dataset.id); renderAdvisor(); }
+  else if (a === "advtgl") set(() => { Advisor.setUnlocked(S.cfg, t.dataset.id, !!S.cfg.locked[t.dataset.id]); });
   else if (t.id === "altAll") set(() => { S.cfg.locked = {}; });
   else if (t.id === "altNone") set(() => { for (const r of DB.recipes) if (r.alt) S.cfg.locked[r.id] = true; });
   else if (t.id === "exportS") { $("io").value = JSON.stringify(S, null, 1); navigator.clipboard?.writeText($("io").value).catch(() => {}); t.textContent = "Copiada"; setTimeout(() => t.textContent = "Copiar configuración", 1500); }
@@ -463,6 +563,7 @@ function importState(txt) {
 function undo() { if (!hist.length) return; S = JSON.parse(hist.pop()); save(); render(); }
 document.addEventListener("keydown", e => {
   if (e.key === "Enter" && e.target.id === "addItem") $("add").click();
+  if (e.key === "Enter" && e.target.id === "advQ") { e.preventDefault(); const b = $("advSug").querySelector("button"); if (b) advAdd(b.dataset.id); }
   if ((e.ctrlKey || e.metaKey) && e.key === "z" && !/INPUT|TEXTAREA|SELECT/.test(e.target.tagName)) { e.preventDefault(); undo(); }
 });
 $("sub").textContent = `Datos del juego (${DB.meta.source}): ${Object.keys(DB.items).length} objetos, ${DB.recipes.length} recetas, ${DB.recipes.filter(r => r.alt).length} alternativas.`;
