@@ -28,6 +28,13 @@ Herramienta para calcular fábricas de Satisfactory: qué recetas usar, cuántas
    - *Optimizar*: el motor elige y mezcla recetas según un criterio (mínimo de recursos ponderado por escasez, mínima potencia o mínimo de máquinas).
    - Con *Maximizar* calcula cuánto puedes producir dentro de los límites que pongas en *Extracción* (o el máximo del mapa).
 4. **Alternativas**: marca las que tienes desbloqueadas. Las bloqueadas no aparecen en los desplegables ni las usa el optimizador.
+   - **Asesor de alternativas** (arriba de la pestaña): recalcula la fábrica activa con el optimizador y su criterio para decirte qué alternativas le convienen.
+     - *Candidatas*: cuánto mejora el plan al desbloquear cada alternativa bloqueada. Puedes evaluar todas o solo *Mi lista* (por ejemplo, las que te ofrece un disco duro); la lista se busca en español o inglés y no se guarda.
+     - *Activas*: cuánto empeora al bloquear cada alternativa desbloqueada («Importa», «Prescindible» o «No se usa»).
+     - Para cada una muestra el cambio del criterio y las diferencias en uso del mapa, energía, máquinas y coste de construcción (puntos del Sink). Desde cada fila puedes desbloquearla o bloquearla (`Ctrl+Z` deshace); los desbloqueos valen para todas las fábricas.
+     - Cada alternativa se evalúa por separado: algunas solo compensan combinadas con otras. Tampoco sabe en qué punto de la partida estás, así que puede recomendar alternativas que aún no puedes conseguir.
+     - Con la fábrica en *Manual*, la base es el plan óptimo con tus alternativas actuales, no tu selección manual.
+     - En fábricas grandes con energía generada tarda unos segundos: lo hace por partes, con barra de progreso y botón *Cancelar*.
 5. **Producción**: cada fila tiene su reloj (%) y sus Somersloops. La tabla calcula los Power Shards necesarios, el reloj uniforme ("real") y la potencia.
 6. **Energía**: en *Cálculo → Energía* eliges entre *Solo informar del consumo* y *Generarla en la fábrica*. Con la segunda, la fábrica produce su propia energía: en manual eliges el generador y su combustible en la fila *Energía* de Producción; al optimizar, el motor los elige según el criterio. Puedes indicar *energía externa disponible* (MW de otra red) para que solo genere el resto. La pestaña *Energía* muestra generadores, combustible, agua, residuos y el consumo por máquina. También puedes poner *Energía* como objetivo para diseñar una central.
    - Generadores: Biomass Burner, carbón, combustible y central nuclear (uranio, plutonio y ficsonio), con overclock.
@@ -73,6 +80,7 @@ El contexto técnico (arquitectura, decisiones, reglas y pendientes) está en `C
 - **Potencia de máquinas variables:** para el Particle Accelerator, el Converter y el Quantum Encoder se usa la media del rango de cada receta.
 - **Resource Well:** indica en *Extracción → Pozos (Pressurizers)* cuántos pozos usas por fluido. Si lo dejas vacío, sus Pressurizers (150 MW cada uno) no se suman y se avisa.
 - **Generación de energía:** no incluye la geotérmica ni el Alien Power Augmenter.
+- **Asesor de alternativas con pozos:** si indicas Pressurizers, su potencia se reparte con una aproximación; en ese caso, desbloquear una alternativa puede empeorar algo el criterio (o bloquearla, mejorarlo). Sin pozos, nunca pasa.
 - **Consumo real:** se calcula con máquinas enteras y reloj uniforme, igual o menor que el planificado; puede sobrar algo de generación.
 - **Máximo del mapa:** corresponde al mapa por defecto (wiki, nodos de la 1.x). Si usas nodos aleatorios de la 1.2, cambia los límites a mano.
 - **Desglose del árbol:** es bruto, no descuenta subproductos; los totales netos están en *Producción*.
