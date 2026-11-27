@@ -5,7 +5,7 @@ import json, os
 H = os.path.dirname(os.path.abspath(__file__))
 rd = lambda *p: open(os.path.join(H, *p), encoding="utf-8").read()
 db = json.load(open(os.path.join(H, "data", "satisfactory_db.json"), encoding="utf-8"))
-js = "\n".join(rd("src", f) for f in ("engine.js", "glyphs.js", "sankey.js", "report.js", "app.js")).replace("</script", "<\\/script")
+js = "\n".join(rd("src", f) for f in ("engine.js", "glyphs.js", "sankey.js", "report.js", "advisor.js", "app.js")).replace("</script", "<\\/script")
 html = (rd("src", "index.template.html")
         .replace("/*__CSS__*/", rd("src", "styles.css"))
         .replace("/*__DB__*/", json.dumps(db, ensure_ascii=False, separators=(",", ":")).replace("</", "<\\/"))
